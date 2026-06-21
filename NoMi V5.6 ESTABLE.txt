@@ -1,0 +1,1897 @@
+// ==UserScript==
+// @name         NoMi Asistente V5.6
+// @namespace    http://tampermonkey.net/
+// @version      5.6
+// @description  Corrección de GPS: la IA usa la ubicación del script
+// @match        https://*/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // ======== CONFIGURACIÓN ========
+    const CONTRASENA_VALIDA = '20092017';
+    const NOMBRE_ASISTENTE = 'NoMi';
+    const DISEÑADOR = 'Gartos';
+    const API_KEY_INTEGRADA = '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';
+    const MODELO_INTEGRADO = 'openai/gpt-oss-120b:free';
+    const URL_BASE_INTEGRADA = 'https://openrouter.ai/api/v1';
+    const TAVILY_API_KEY = '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';
+    const DIAS_HISTORIAL = 7;
+    const LIMITE_TEXTO_NORMAL = 2000;
+    const LIMITE_TEXTO_LIGERO = 500;
+    const MENSAJES_VISIBLES = 50;
+    const CONTEXTOS_DISPONIBLES = [10, 20, 30];
+    const DOMINIOS_UNIFICADOS = ['youtube.com', 'reddit.com', 'wikipedia.org'];
+    const MIN_WIDTH = 280;
+    const MAX_WIDTH_PERCENT = 0.3;
+    const MIN_HEIGHT = 300;
+    const MAX_HEIGHT_PERCENT = 0.55;
+    const ANCHO_POR_DEFECTO = 320;
+    const ALTO_POR_DEFECTO = 400;
+    const UBICACION_EXPIRACION = 3 * 60 * 60 * 1000;
+    const CONTEXTO_RECIENTE = 10;
+    const DIAS_LIMITE_HISTORIAL = 7;
+    const VERSION_SCRIPT = '5.6';
+    const FECHA_LANZAMIENTO = '21/06/2026';
+
+    // ======== ESTADO GLOBAL ========
+    let modoWebActivo = false;
+    let modoResumenActivo = false;
+    let modoLigeroActivo = false;
+    let busquedaWebActiva = false;
+    let busquedaWebTemporal = false;
+    let ubicacionActivada = false;
+    let contextoSeleccionado = 10;
+    let resumenPersistente = '';
+    let apiKeyActual = '';
+    let modeloActual = '';
+    let urlBaseActual = '';
+    let burbujaVisible = false;
+    let ventanaAbierta = false;
+    let validado = false;
+    let isWaiting = false;
+    let contadorPreguntas = 0;
+    let historial = [];
+    let tokens = { total: 0, input: 0, output: 0 };
+    let posicionBurbuja = { x: 20, y: 20 };
+    let posicionVentana = { x: 0, y: 0 };
+    let posicionOriginalVentana = null;
+    let ventanaBloqueada = false;
+    let tamanoVentana = { w: ANCHO_POR_DEFECTO, h: ALTO_POR_DEFECTO };
+    let busquedaForzada = false;
+    let ubicacionActual = null;
+    let fuenteUbicacion = 'desconocida';
+
+    // ======== CLAVES LOCALSTORAGE ========
+    const STORAGE_VALIDADO = 'nomi_validado';
+    const STORAGE_API_KEY = 'nomi_api_key';
+    const STORAGE_MODELO = 'nomi_modelo';
+    const STORAGE_URL = 'nomi_url';
+    const STORAGE_POSICION = 'nomi_posicion';
+    const STORAGE_POSICION_VENTANA = 'nomi_posicion_ventana';
+    const STORAGE_RESUMEN = 'nomi_resumen';
+    const STORAGE_TOKENS = 'nomi_tokens';
+    const STORAGE_CONTADOR = 'nomi_contador';
+    const STORAGE_CONTEXTO = 'nomi_contexto';
+    const STORAGE_MODO_LIGERO = 'nomi_modo_ligero';
+    const STORAGE_MODO_RESUMEN = 'nomi_modo_resumen';
+    const STORAGE_BUSQUEDA_WEB = 'nomi_busqueda_web';
+    const STORAGE_TAMANO_VENTANA = 'nomi_tamano_ventana';
+    const STORAGE_UBICACION = 'nomi_ubicacion';
+    const STORAGE_UBICACION_ACTIVADA = 'nomi_ubicacion_activada';
+    const STORAGE_ERROR_LOGS = 'nomi_error_logs';
+
+    // ======== FUNCIONES DE PERSISTENCIA ========
+    function getPageKey() {
+        const host = window.location.hostname;
+        const path = window.location.pathname;
+        if (DOMINIOS_UNIFICADOS.some(d => host.includes(d))) return host;
+        return host + path;
+    }
+    function getSessionKey() {
+        const hoy = new Date().toISOString().slice(0, 10);
+        return getPageKey() + '_' + hoy;
+    }
+    function getHistorial() {
+        const key = 'nomi_historial_' + getSessionKey();
+        const data = localStorage.getItem(key);
+        return data ? JSON.parse(data) : [];
+    }
+    function guardarHistorial(mensajes) {
+        const key = 'nomi_historial_' + getSessionKey();
+        localStorage.setItem(key, JSON.stringify(mensajes));
+    }
+    function getValidado() { return localStorage.getItem(STORAGE_VALIDADO) === 'true'; }
+    function setValidado(v) { localStorage.setItem(STORAGE_VALIDADO, v ? 'true' : 'false'); }
+    function getApiKey() { return localStorage.getItem(STORAGE_API_KEY) || API_KEY_INTEGRADA; }
+    function setApiKey(k) { localStorage.setItem(STORAGE_API_KEY, k); }
+    function getModelo() { return localStorage.getItem(STORAGE_MODELO) || MODELO_INTEGRADO; }
+    function setModelo(m) { localStorage.setItem(STORAGE_MODELO, m); }
+    function getUrlBase() { return localStorage.getItem(STORAGE_URL) || URL_BASE_INTEGRADA; }
+    function setUrlBase(u) { localStorage.setItem(STORAGE_URL, u); }
+    function getPosicion() {
+        const data = localStorage.getItem(STORAGE_POSICION);
+        return data ? JSON.parse(data) : { x: 20, y: 20 };
+    }
+    function setPosicion(p) { localStorage.setItem(STORAGE_POSICION, JSON.stringify(p)); }
+    function getPosicionVentana() {
+        const data = localStorage.getItem(STORAGE_POSICION_VENTANA);
+        return data ? JSON.parse(data) : null;
+    }
+    function setPosicionVentana(p) { localStorage.setItem(STORAGE_POSICION_VENTANA, JSON.stringify(p)); posicionOriginalVentana = p?.y || null; }
+    function getResumen() { return localStorage.getItem(STORAGE_RESUMEN) || ''; }
+    function setResumen(r) { localStorage.setItem(STORAGE_RESUMEN, r); resumenPersistente = r; }
+    function getTokens() {
+        const data = localStorage.getItem(STORAGE_TOKENS);
+        return data ? JSON.parse(data) : { total: 0, input: 0, output: 0 };
+    }
+    function setTokens(t) { localStorage.setItem(STORAGE_TOKENS, JSON.stringify(t)); tokens = t; }
+    function getContador() { return parseInt(localStorage.getItem(STORAGE_CONTADOR)) || 0; }
+    function setContador(c) { localStorage.setItem(STORAGE_CONTADOR, c.toString()); contadorPreguntas = c; }
+    function getContexto() { return parseInt(localStorage.getItem(STORAGE_CONTEXTO)) || 10; }
+    function setContexto(c) { localStorage.setItem(STORAGE_CONTEXTO, c.toString()); contextoSeleccionado = c; }
+    function getModoLigero() { return localStorage.getItem(STORAGE_MODO_LIGERO) === 'true'; }
+    function setModoLigero(v) { localStorage.setItem(STORAGE_MODO_LIGERO, v ? 'true' : 'false'); modoLigeroActivo = v; }
+    function getModoResumen() { return localStorage.getItem(STORAGE_MODO_RESUMEN) === 'true'; }
+    function setModoResumen(v) { localStorage.setItem(STORAGE_MODO_RESUMEN, v ? 'true' : 'false'); modoResumenActivo = v; }
+    function getBusquedaWeb() { return localStorage.getItem(STORAGE_BUSQUEDA_WEB) === 'true'; }
+    function setBusquedaWeb(v) { localStorage.setItem(STORAGE_BUSQUEDA_WEB, v ? 'true' : 'false'); busquedaWebActiva = v; }
+    function getTamanoVentana() {
+        const data = localStorage.getItem(STORAGE_TAMANO_VENTANA);
+        return data ? JSON.parse(data) : { w: ANCHO_POR_DEFECTO, h: ALTO_POR_DEFECTO };
+    }
+    function setTamanoVentana(t) { localStorage.setItem(STORAGE_TAMANO_VENTANA, JSON.stringify(t)); tamanoVentana = t; }
+    function getUbicacionActivada() { return localStorage.getItem(STORAGE_UBICACION_ACTIVADA) === 'true'; }
+    function setUbicacionActivada(v) { localStorage.setItem(STORAGE_UBICACION_ACTIVADA, v ? 'true' : 'false'); ubicacionActivada = v; }
+    function getUbicacion() {
+        const data = localStorage.getItem(STORAGE_UBICACION);
+        if (!data) return null;
+        const obj = JSON.parse(data);
+        if (Date.now() - obj.timestamp > UBICACION_EXPIRACION) {
+            localStorage.removeItem(STORAGE_UBICACION);
+            return null;
+        }
+        return obj;
+    }
+    function setUbicacion(ubicacion) {
+        ubicacion.timestamp = Date.now();
+        localStorage.setItem(STORAGE_UBICACION, JSON.stringify(ubicacion));
+        ubicacionActual = ubicacion;
+    }
+
+    // ======== FUNCIONES DE LOGS ========
+    function registrarError(tipo, mensaje, contexto) {
+        try {
+            const logs = JSON.parse(localStorage.getItem(STORAGE_ERROR_LOGS) || '[]');
+            const entrada = {
+                timestamp: new Date().toISOString(),
+                type: tipo,
+                message: mensaje,
+                context: contexto || 'Sin contexto adicional',
+                version: VERSION_SCRIPT,
+                url: window.location.href
+            };
+            logs.push(entrada);
+            if (logs.length > 20) logs.shift();
+            localStorage.setItem(STORAGE_ERROR_LOGS, JSON.stringify(logs));
+        } catch (e) {
+            console.warn('No se pudo registrar el error:', e);
+        }
+    }
+
+    function exportarLogs() {
+        const logs = JSON.parse(localStorage.getItem(STORAGE_ERROR_LOGS) || '[]');
+        if (logs.length === 0) {
+            mostrarNotificacionTemporal('No hay errores registrados.');
+            return;
+        }
+        let texto = `=== LOGS DE NoMi ===\n`;
+        texto += `Versión: ${VERSION_SCRIPT}\n`;
+        texto += `Fecha de exportación: ${new Date().toISOString()}\n`;
+        texto += `Total de errores: ${logs.length}\n\n`;
+        logs.forEach((log, i) => {
+            texto += `--- Error ${i+1} ---\n`;
+            texto += `Timestamp: ${log.timestamp}\n`;
+            texto += `Tipo: ${log.type}\n`;
+            texto += `Mensaje: ${log.message}\n`;
+            texto += `Contexto: ${log.context}\n`;
+            texto += `URL: ${log.url || 'No disponible'}\n`;
+            if (log.stack) texto += `Stack: ${log.stack}\n`;
+            texto += '\n';
+        });
+        const blob = new Blob([texto], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `nomi_logs_${new Date().toISOString().slice(0,10)}.txt`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    // ======== LIMPIEZA AUTOMÁTICA DE HISTORIALES ========
+    function limpiarHistorialesAntiguos() {
+        const keys = Object.keys(localStorage);
+        const hoy = new Date();
+        let eliminados = 0;
+        let espacioLiberado = 0;
+        keys.forEach(key => {
+            if (key.startsWith('nomi_historial_')) {
+                const partes = key.split('_');
+                if (partes.length >= 4) {
+                    const fechaStr = partes.slice(3).join('_');
+                    try {
+                        const fecha = new Date(fechaStr);
+                        const diffDias = Math.floor((hoy - fecha) / (1000 * 60 * 60 * 24));
+                        if (diffDias > DIAS_LIMITE_HISTORIAL) {
+                            const data = localStorage.getItem(key);
+                            if (data) espacioLiberado += data.length;
+                            localStorage.removeItem(key);
+                            eliminados++;
+                            const chatsKey = 'nomi_chats_list_' + partes.slice(1, 3).join('_');
+                            const chats = JSON.parse(localStorage.getItem(chatsKey) || '[]');
+                            const nuevaLista = chats.filter(f => f !== fechaStr);
+                            if (nuevaLista.length !== chats.length) {
+                                localStorage.setItem(chatsKey, JSON.stringify(nuevaLista));
+                            }
+                        }
+                    } catch (e) {}
+                }
+            }
+        });
+        if (eliminados > 0) {
+            console.log(`🧹 Limpieza automática: ${eliminados} historiales eliminados. Espacio liberado: ~${Math.round(espacioLiberado/1024)} KB`);
+        }
+        return { eliminados, espacioLiberado };
+    }
+
+    function calcularEspacioOcupado() {
+        let total = 0;
+        const keys = Object.keys(localStorage);
+        keys.forEach(key => {
+            if (key.startsWith('nomi_')) {
+                total += localStorage.getItem(key).length;
+            }
+        });
+        return total;
+    }
+
+    // ======== MOSTRAR AYUDA ========
+    function mostrarAyuda() {
+        const ayuda = `
+**📋 Comandos disponibles para NoMi**
+
+| Comando | Descripción |
+|---------|-------------|
+| \`!cmd\` o \`!comandos\` | Muestra esta lista de ayuda. |
+| \`investiga: [pregunta]\` o \`busca: [pregunta]\` | Realiza una búsqueda en la web (requiere clave integrada). |
+| \`analiza\`, \`examina\` o \`escanea\` | Analiza el contenido de la página actual. |
+| \`presentate\` | Muestra nuevamente el mensaje de bienvenida. |
+| \`actualizar ubicación\` | Fuerza la actualización de la ubicación (si está activada). |
+
+**Botones disponibles:**
+- 🌐 Activa/desactiva el análisis automático de la página.
+- 🔍 Forza una búsqueda web para la pregunta actual.
+- 📊 Muestra estadísticas de uso.
+- 📤 Exporta el historial a TXT o JSON.
+- ⚙️ Abre el menú de configuración.
+
+> **Nota:** En páginas de configuración de Google (accounts.google.com), la burbuja puede no aparecer. Vuelva a la página anterior o recargue manualmente.
+`;
+        agregarMensaje('bot', ayuda);
+    }
+
+    // ======== CARGA INICIAL ========
+    historial = getHistorial();
+    tokens = getTokens();
+    contadorPreguntas = getContador();
+    resumenPersistente = getResumen();
+    validado = getValidado();
+    apiKeyActual = getApiKey();
+    modeloActual = getModelo();
+    urlBaseActual = getUrlBase();
+    posicionBurbuja = getPosicion();
+    const posV = getPosicionVentana();
+    if (posV) posicionVentana = posV;
+    posicionOriginalVentana = posV?.y || null;
+    contextoSeleccionado = getContexto();
+    modoLigeroActivo = getModoLigero();
+    modoResumenActivo = getModoResumen();
+    busquedaWebActiva = getBusquedaWeb();
+    tamanoVentana = getTamanoVentana();
+    ubicacionActivada = getUbicacionActivada();
+    ubicacionActual = getUbicacion();
+
+    limpiarHistorialesAntiguos();
+
+    // ======== CÁLCULO DE TAMAÑO REAL DE LA VENTANA ========
+    function obtenerTamanoReal() {
+        let w = tamanoVentana.w;
+        let h = tamanoVentana.h;
+        const maxW = Math.min(window.innerWidth * MAX_WIDTH_PERCENT, window.innerWidth - 20);
+        const maxH = Math.min(window.innerHeight * MAX_HEIGHT_PERCENT, window.innerHeight - 20);
+        w = Math.max(MIN_WIDTH, Math.min(maxW, w));
+        h = Math.max(MIN_HEIGHT, Math.min(maxH, h));
+        return { w, h };
+    }
+
+    // ======== OBTENER FECHA/HORA CONTEXTUAL ========
+    function obtenerContextoTiempo() {
+        const ahora = new Date();
+        const fecha = ahora.toISOString().slice(0, 10);
+        const hora = ahora.toTimeString().slice(0, 5);
+        const zona = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const utcOffset = -ahora.getTimezoneOffset() / 60;
+        const offsetStr = utcOffset >= 0 ? `+${utcOffset}` : `${utcOffset}`;
+        return `📅 ${fecha} ${hora} (UTC${offsetStr})`;
+    }
+
+    // ======== DETECTAR SI LA PREGUNTA REQUIERE UBICACIÓN ========
+    function requiereUbicacion(texto) {
+        const palabrasClave = [
+            'clima', 'pronóstico', 'tiempo', 'temperatura', 'lluvia', 'viento',
+            'evento', 'concierto', 'festival', 'partido', 'fútbol',
+            'dónde está', 'cómo llegar', 'dirección', 'transporte'
+        ];
+        const textoLower = texto.toLowerCase();
+        return palabrasClave.some(palabra => textoLower.includes(palabra));
+    }
+
+    // ======== OBTENER UBICACIÓN POR GPS ========
+    function obtenerUbicacionPorGPS() {
+        return new Promise((resolve, reject) => {
+            if (!navigator.geolocation) {
+                reject(new Error('Geolocalización no soportada por este navegador.'));
+                return;
+            }
+            navigator.geolocation.getCurrentPosition(
+                (pos) => {
+                    const lat = pos.coords.latitude;
+                    const lon = pos.coords.longitude;
+                    fuenteUbicacion = 'gps';
+                    console.log(`📍 Ubicación por GPS: lat ${lat}, lon ${lon}`);
+                    fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=es`)
+                        .then(res => res.json())
+                        .then(data => {
+                            const ciudad = data.city || data.locality || data.principalSubdivision || 'Ubicación desconocida';
+                            const pais = data.countryName || '';
+                            resolve({
+                                lat: lat,
+                                lon: lon,
+                                ciudad: ciudad,
+                                pais: pais,
+                                timestamp: Date.now(),
+                                fuente: 'gps'
+                            });
+                        })
+                        .catch(() => {
+                            resolve({
+                                lat: lat,
+                                lon: lon,
+                                ciudad: 'Ubicación desconocida',
+                                pais: '',
+                                timestamp: Date.now(),
+                                fuente: 'gps'
+                            });
+                        });
+                },
+                (error) => {
+                    if (error.code === 1) {
+                        reject(new Error('Permiso denegado. Activa la ubicación en los ajustes del navegador.'));
+                    } else if (error.code === 3) {
+                        reject(new Error('Timeout. Reintentando...'));
+                    } else {
+                        reject(new Error('Error al obtener ubicación: ' + error.message));
+                    }
+                },
+                { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
+            );
+        });
+    }
+
+    // ======== FUNCIÓN DE BÚSQUEDA WEB CON TAVILY ========
+    async function buscarWeb(consulta) {
+        if (apiKeyActual !== API_KEY_INTEGRADA) {
+            throw new Error('La búsqueda web solo está disponible con la clave integrada de la app (usa la contraseña 20092017).');
+        }
+        try {
+            const respuesta = await fetch('https://api.tavily.com/search', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    api_key: TAVILY_API_KEY,
+                    query: consulta,
+                    search_depth: 'basic',
+                    max_results: 5
+                })
+            });
+            if (!respuesta.ok) {
+                const errorText = await respuesta.text();
+                throw new Error(`Error ${respuesta.status}: ${errorText}`);
+            }
+            const datos = await respuesta.json();
+            return datos;
+        } catch (error) {
+            registrarError('network', error.message, `Búsqueda: "${consulta}"`);
+            throw error;
+        }
+    }
+
+    // ======== PROCESAR BÚSQUEDA (CON UBICACIÓN GPS FORZADA) ========
+    async function procesarBusqueda(consulta) {
+        if (apiKeyActual !== API_KEY_INTEGRADA) {
+            agregarMensaje('bot', '❌ La búsqueda web solo está disponible con la clave integrada de la app.');
+            return;
+        }
+        agregarMensaje('bot', `🔍 Realizando búsqueda: "${consulta}"...`);
+        try {
+            // 🔥 OBTENER UBICACIÓN GPS DEL SCRIPT
+            let ubicacionTexto = '';
+            let ubicacionCoordenadas = '';
+            if (ubicacionActivada && ubicacionActual) {
+                ubicacionTexto = `${ubicacionActual.ciudad}, ${ubicacionActual.pais}`;
+                ubicacionCoordenadas = `${ubicacionActual.lat}, ${ubicacionActual.lon}`;
+            }
+
+            // 🔥 CONSTRUIR CONSULTA CON UBICACIÓN EXPLÍCITA
+            let consultaFinal = consulta;
+            if (ubicacionCoordenadas && requiereUbicacion(consulta)) {
+                consultaFinal = `${consulta} en ${ubicacionTexto} (coordenadas: ${ubicacionCoordenadas})`;
+            }
+
+            const resultados = await buscarWeb(consultaFinal);
+            if (!resultados || !resultados.results || resultados.results.length === 0) {
+                const msg = `❌ No se encontraron resultados para esa consulta.`;
+                historial.push({role: 'assistant', content: msg});
+                guardarHistorial(historial);
+                agregarMensaje('bot', msg);
+                return;
+            }
+            const resultadosTexto = resultados.results.map((r, i) => {
+                return `${i+1}. ${r.title || 'Sin título'}\n   ${r.content || 'Sin descripción'}`;
+            }).join('\n\n');
+            
+            // 🔥 PROMPT CON INSTRUCCIÓN EXPLÍCITA DE UBICACIÓN GPS
+            const prompt = `El usuario se encuentra en ${ubicacionTexto} (coordenadas GPS: ${ubicacionCoordenadas}). **DEBES usar ESTA ubicación para todas las consultas de clima y eventos locales.** Ignora cualquier otra ubicación que puedas inferir de la IP.\n\nInvestigué en la web sobre: "${consultaFinal}". Estos son los resultados obtenidos:\n\n${resultadosTexto}\n\nPor favor, ofrezca una respuesta clara, concisa y en un tono profesional pero cercano. Evite el uso excesivo de tablas o datos innecesarios. Resume la información más importante en 2-3 párrafos. Si hay datos numéricos (temperatura, precios, etc.), menciónelos de forma fluida dentro de la conversación. Mantenga un tono de colaboración entre iguales, sin tuteo excesivo.`;
+
+            const respuestaIA = await llamarIA(prompt);
+            const respuestaConIndicador = `🔍 ${respuestaIA}`;
+            historial.push({role: 'assistant', content: respuestaConIndicador});
+            guardarHistorial(historial);
+            agregarMensaje('bot', respuestaConIndicador);
+        } catch (error) {
+            const msg = `❌ Error en la búsqueda: ${error.message}`;
+            historial.push({role: 'assistant', content: msg});
+            guardarHistorial(historial);
+            agregarMensaje('bot', msg);
+        }
+    }
+
+    // ======== FUNCIÓN PARA LLAMAR A LA IA ========
+    async function llamarIA(mensaje) {
+        try {
+            const respuesta = await fetch(urlBaseActual + '/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + apiKeyActual
+                },
+                body: JSON.stringify({
+                    model: modeloActual,
+                    messages: [{role: 'user', content: mensaje}],
+                    stream: false,
+                    max_tokens: 1024
+                })
+            });
+            if (!respuesta.ok) {
+                const errorText = await respuesta.text();
+                throw new Error(`Error ${respuesta.status}: ${errorText}`);
+            }
+            const datos = await respuesta.json();
+            if (datos.choices && datos.choices[0]) {
+                return datos.choices[0].message.content;
+            } else {
+                throw new Error(datos.error?.message || 'Error en la IA');
+            }
+        } catch (error) {
+            registrarError('api', error.message, `Modelo: ${modeloActual}, URL: ${urlBaseActual}`);
+            throw error;
+        }
+    }
+
+    // ======== DETECCIÓN DE PREGUNTAS QUE REQUIEREN BÚSQUEDA ========
+    function requiereBusqueda(texto) {
+        const palabrasClave = [
+            'clima', 'pronóstico', 'tiempo', 'temperatura', 'lluvia', 'viento',
+            'noticias', 'últimas noticias', 'eventos', 'actualidad',
+            'precio', 'cotización', 'dólar', 'euro', 'bitcoin',
+            'resultados', 'partido', 'fútbol', 'deporte',
+            'evento', 'concierto', 'festival',
+            'qué pasó', 'quién ganó'
+        ];
+        const textoLower = texto.toLowerCase();
+        return palabrasClave.some(palabra => textoLower.includes(palabra));
+    }
+
+    // ======== INICIO DEL ASISTENTE ========
+    function iniciarAsistente() {
+        historial = getHistorial();
+        tokens = getTokens();
+        contadorPreguntas = getContador();
+        resumenPersistente = getResumen();
+        contextoSeleccionado = getContexto();
+        modoLigeroActivo = getModoLigero();
+        modoResumenActivo = getModoResumen();
+        busquedaWebActiva = getBusquedaWeb();
+        tamanoVentana = getTamanoVentana();
+        ubicacionActivada = getUbicacionActivada();
+        ubicacionActual = getUbicacion();
+
+        crearBurbuja();
+        crearVentanaChat();
+        configurarTeclado();
+
+        if (ubicacionActivada && !ubicacionActual) {
+            actualizarUbicacion(true);
+        }
+
+        // Mensaje de sistema para tono profesional (no se muestra)
+        if (historial.length === 0) {
+            const sistema = `Eres NoMi, un asistente profesional y formal pero cercano. Responde con claridad, respeto y precisión. Evita el tuteo excesivo y mantén un tono de colaboración entre iguales. El usuario espera respuestas útiles, concisas y bien estructuradas.`;
+            historial.unshift({ role: 'system', content: sistema });
+            guardarHistorial(historial);
+
+            const bienvenida = `Hola, soy **${NOMBRE_ASISTENTE}**, su asistente de navegación.\nPara ver la lista de comandos disponibles, escriba \`!cmd\`.\n¿En qué puedo ayudarle?`;
+            historial.push({role: 'assistant', content: bienvenida});
+            guardarHistorial(historial);
+            agregarMensaje('bot', bienvenida);
+        } else {
+            cargarHistorial();
+        }
+        actualizarStats();
+        if (!burbujaVisible) toggleBurbuja(true);
+        console.log(`✅ ${NOMBRE_ASISTENTE} V${VERSION_SCRIPT} activado!`);
+    }
+
+    // ======== CONFIGURAR TECLADO ========
+    function configurarTeclado() {
+        if (!window.visualViewport) return;
+        window.visualViewport.addEventListener('resize', () => {
+            const win = document.getElementById('nomi-chat');
+            if (!win || win.style.display !== 'flex') return;
+            const viewportHeight = window.visualViewport.height;
+            const keyboardHeight = window.innerHeight - viewportHeight;
+            if (keyboardHeight > 100) {
+                const nuevoTop = Math.max(10, window.innerHeight - keyboardHeight - win.offsetHeight - 20);
+                win.style.top = nuevoTop + 'px';
+            } else {
+                if (posicionOriginalVentana !== null) {
+                    const maxTop = window.innerHeight - win.offsetHeight - 20;
+                    const topRestaurado = Math.min(posicionOriginalVentana, maxTop);
+                    win.style.top = Math.max(10, topRestaurado) + 'px';
+                }
+            }
+        });
+    }
+
+    // ======== ACTUALIZAR UBICACIÓN ========
+    async function actualizarUbicacion(silencioso = false) {
+        if (!ubicacionActivada) {
+            if (!silencioso) {
+                mostrarNotificacionTemporal('📍 La ubicación está desactivada. Actívala en el menú (⚙️).');
+            }
+            return null;
+        }
+        try {
+            const ubicacion = await obtenerUbicacionPorGPS();
+            fuenteUbicacion = ubicacion.fuente || 'gps';
+            setUbicacion(ubicacion);
+            if (!silencioso) {
+                mostrarNotificacionTemporal(`📍 Ubicación actualizada: ${ubicacion.ciudad}, ${ubicacion.pais} (${fuenteUbicacion === 'gps' ? 'GPS' : 'IP'})`);
+                // 🔥 Mensaje de confirmación en el chat
+                agregarMensaje('bot', `📍 Ubicación establecida: **${ubicacion.ciudad}, ${ubicacion.pais}** (${fuenteUbicacion === 'gps' ? 'GPS' : 'IP'}). Las consultas de clima usarán esta ubicación.`);
+            }
+            actualizarBarraUbicacion();
+            inyectarContextoUbicacion(ubicacion);
+            return ubicacion;
+        } catch (error) {
+            const mensajeError = error.message.includes('Permiso denegado') ? '📍 Permiso denegado. Actívalo en ajustes.' : `📍 Error: ${error.message}`;
+            actualizarBarraUbicacionConError(mensajeError);
+            if (!silencioso) {
+                mostrarNotificacionTemporal(`❌ ${error.message}`);
+            }
+            registrarError('gps', error.message, 'Ubicación');
+            return null;
+        }
+    }
+
+    // ======== ACTUALIZAR BARRA DE UBICACIÓN CON ERROR ========
+    function actualizarBarraUbicacionConError(mensaje) {
+        const el = document.getElementById('nomi-ubicacion-display');
+        if (el) {
+            el.textContent = mensaje;
+            el.style.color = '#f55036';
+        }
+    }
+
+    // ======== INYECTAR CONTEXTO DE UBICACIÓN EN EL HISTORIAL ========
+    function inyectarContextoUbicacion(ubicacion) {
+        if (!ubicacion) return;
+        const fuente = ubicacion.fuente === 'gps' ? 'GPS' : 'IP aproximada';
+        // 🔥 INSTRUCCIÓN EXPLÍCITA PARA LA IA
+        const mensajeContexto = `📍 Ubicación del usuario: ${ubicacion.ciudad}, ${ubicacion.pais} (${fuente}). Coordenadas GPS: ${ubicacion.lat}, ${ubicacion.lon}. **DEBES usar ESTA ubicación para todas las consultas de clima y eventos locales.** Ignora cualquier otra ubicación que puedas inferir de la IP.`;
+        const existe = historial.some(msg => 
+            msg.role === 'system' && msg.content.includes('Ubicación del usuario')
+        );
+        if (existe) {
+            const index = historial.findIndex(msg => 
+                msg.role === 'system' && msg.content.includes('Ubicación del usuario')
+            );
+            if (index !== -1) {
+                historial[index].content = mensajeContexto;
+                guardarHistorial(historial);
+            }
+        } else {
+            historial.unshift({ role: 'system', content: mensajeContexto });
+            guardarHistorial(historial);
+        }
+    }
+
+    // ======== ACTUALIZAR BARRA DE UBICACIÓN ========
+    function actualizarBarraUbicacion() {
+        const el = document.getElementById('nomi-ubicacion-display');
+        if (!el) return;
+        if (ubicacionActivada && ubicacionActual) {
+            const fuente = ubicacionActual.fuente === 'gps' ? 'GPS' : 'IP';
+            el.textContent = `📍 ${ubicacionActual.ciudad}, ${ubicacionActual.pais} (${fuente})`;
+            el.style.color = fuente === 'GPS' ? '#34a853' : '#f5a623';
+            el.style.display = 'inline';
+            document.getElementById('nomi-ubicacion-update').style.display = 'inline';
+        } else if (ubicacionActivada && !ubicacionActual) {
+            el.textContent = '📍 Obteniendo ubicación...';
+            el.style.color = '#888';
+            el.style.display = 'inline';
+            document.getElementById('nomi-ubicacion-update').style.display = 'inline';
+        } else {
+            el.textContent = '📍 Ubicación desactivada';
+            el.style.color = '#888';
+            el.style.display = 'inline';
+            document.getElementById('nomi-ubicacion-update').style.display = 'none';
+        }
+    }
+
+    // ======== CREAR BURBUJA ========
+    function crearBurbuja() {
+        const existing = document.getElementById('nomi-bubble');
+        if (existing) existing.remove();
+
+        const bubble = document.createElement('div');
+        bubble.id = 'nomi-bubble';
+        bubble.textContent = '💬';
+        bubble.style.cssText = `
+            position: fixed;
+            left: 20px;
+            bottom: 20px;
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background: #1a1a2e;
+            border: 2px solid #FF6B6B;
+            color: white;
+            font-size: 28px;
+            cursor: pointer;
+            z-index: 999998;
+            box-shadow: 0 4px 16px rgba(255,107,107,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+            touch-action: none;
+            transition: transform 0.2s;
+        `;
+
+        if (posicionBurbuja.x || posicionBurbuja.y) {
+            bubble.style.left = posicionBurbuja.x + 'px';
+            bubble.style.top = posicionBurbuja.y + 'px';
+            bubble.style.right = 'auto';
+            bubble.style.bottom = 'auto';
+        }
+
+        document.body.appendChild(bubble);
+        burbujaVisible = true;
+
+        let startX, startY, origX, origY, isDragging = false, isTouching = false;
+
+        bubble.addEventListener('touchstart', (e) => {
+            if (ventanaAbierta) return;
+            const touch = e.touches[0];
+            startX = touch.clientX;
+            startY = touch.clientY;
+            origX = bubble.offsetLeft || 0;
+            origY = bubble.offsetTop || 0;
+            isDragging = false;
+            isTouching = true;
+            bubble.style.cursor = 'grabbing';
+        }, { passive: true });
+
+        bubble.addEventListener('touchmove', (e) => {
+            if (!isTouching || ventanaAbierta) return;
+            const touch = e.touches[0];
+            const dx = touch.clientX - startX;
+            const dy = touch.clientY - startY;
+            if (Math.sqrt(dx*dx + dy*dy) > 10) {
+                isDragging = true;
+                let newX = origX + dx;
+                let newY = origY + dy;
+                newX = Math.max(0, Math.min(window.innerWidth - 56, newX));
+                newY = Math.max(0, Math.min(window.innerHeight - 56, newY));
+                bubble.style.left = newX + 'px';
+                bubble.style.top = newY + 'px';
+                bubble.style.right = 'auto';
+                bubble.style.bottom = 'auto';
+                posicionBurbuja = { x: newX, y: newY };
+                setPosicion(posicionBurbuja);
+            }
+        }, { passive: true });
+
+        bubble.addEventListener('touchend', () => {
+            isTouching = false;
+            bubble.style.cursor = 'pointer';
+            if (!isDragging) {
+                toggleVentana();
+            }
+            isDragging = false;
+        }, { passive: true });
+
+        let mouseDown = false, mouseStartX, mouseStartY, mouseOrigX, mouseOrigY, mouseDragging = false;
+        bubble.addEventListener('mousedown', (e) => {
+            if (ventanaAbierta) return;
+            mouseDown = true;
+            mouseStartX = e.clientX;
+            mouseStartY = e.clientY;
+            mouseOrigX = bubble.offsetLeft || 0;
+            mouseOrigY = bubble.offsetTop || 0;
+            mouseDragging = false;
+            bubble.style.cursor = 'grabbing';
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!mouseDown || ventanaAbierta) return;
+            const dx = e.clientX - mouseStartX;
+            const dy = e.clientY - mouseStartY;
+            if (Math.sqrt(dx*dx + dy*dy) > 5) {
+                mouseDragging = true;
+                let newX = mouseOrigX + dx;
+                let newY = mouseOrigY + dy;
+                newX = Math.max(0, Math.min(window.innerWidth - 56, newX));
+                newY = Math.max(0, Math.min(window.innerHeight - 56, newY));
+                bubble.style.left = newX + 'px';
+                bubble.style.top = newY + 'px';
+                bubble.style.right = 'auto';
+                bubble.style.bottom = 'auto';
+                posicionBurbuja = { x: newX, y: newY };
+                setPosicion(posicionBurbuja);
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (mouseDown) {
+                mouseDown = false;
+                bubble.style.cursor = 'pointer';
+                if (!mouseDragging) {
+                    toggleVentana();
+                }
+                mouseDragging = false;
+            }
+        });
+    }
+
+    // ======== VENTANA DE CHAT ========
+    function crearVentanaChat() {
+        const existing = document.getElementById('nomi-chat');
+        if (existing) existing.remove();
+
+        const win = document.createElement('div');
+        win.id = 'nomi-chat';
+        const { w, h } = obtenerTamanoReal();
+        let left = window.innerWidth - w - 20;
+        let top = window.innerHeight - h - 90;
+        if (posicionVentana.x && posicionVentana.y) {
+            left = posicionVentana.x;
+            top = posicionVentana.y;
+        }
+        left = Math.max(0, Math.min(window.innerWidth - w, left));
+        top = Math.max(0, Math.min(window.innerHeight - h, top));
+
+        win.style.cssText = `
+            position: fixed;
+            left: ${left}px;
+            top: ${top}px;
+            width: ${w}px;
+            height: ${h}px;
+            max-width: 90vw;
+            max-height: 90vh;
+            background: #1a1a2e;
+            border-radius: 20px;
+            padding: 12px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.9);
+            z-index: 999997;
+            font-family: sans-serif;
+            border: 1px solid #4a4a6a;
+            display: none;
+            flex-direction: column;
+            overflow: hidden;
+            transition: none;
+        `;
+        posicionVentana = { x: left, y: top };
+        setPosicionVentana(posicionVentana);
+
+        win.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; color:#fff; flex-shrink:0;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <b style="font-size:13px; color:#FF6B6B;">${NOMBRE_ASISTENTE}</b>
+                    <span id="nomi-modelo-display" style="font-size:9px; color:#888;">${modeloActual}</span>
+                </div>
+                <div>
+                    <button id="nomi-web-btn" style="background:none; border:1px solid #555; border-radius:6px; padding:2px 8px; color:#888; font-size:12px; cursor:pointer; margin-right:4px;">🌐</button>
+                    <button id="nomi-stats-btn" style="background:none; border:none; color:#888; font-size:14px; cursor:pointer; margin-right:4px;" title="Estadísticas">📊</button>
+                    <button id="nomi-export-btn" style="background:none; border:none; color:#888; font-size:14px; cursor:pointer; margin-right:4px;" title="Exportar historial">📤</button>
+                    <button id="nomi-menu-btn" style="background:none; border:1px solid #555; border-radius:6px; padding:2px 8px; color:#888; font-size:12px; cursor:pointer; margin-right:4px;">⚙️</button>
+                </div>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:9px; color:#555; flex-shrink:0; margin-bottom:4px;">
+                <span id="nomi-contexto-indicador">📚 Contexto: ${contextoSeleccionado} mensajes</span>
+                <span id="nomi-web-status" style="display:none; color:#34a853;">🌐 Web activo</span>
+            </div>
+            <div id="nomi-chat-body" style="flex:1; background:#0d0d1a; border-radius:12px; padding:8px; overflow-y:auto; margin-bottom:8px; font-size:12px; color:#ccc; min-height:100px;">
+                <div style="color:#666; text-align:center;">Cargando conversación...</div>
+            </div>
+            <div id="nomi-loading" style="display:none; color:#888; font-size:11px; font-style:italic; margin-bottom:4px; flex-shrink:0;">✍️ Escribiendo<span id="nomi-dots">.</span></div>
+            <div style="display:flex; gap:6px; flex-shrink:0;">
+                <input id="nomi-input" type="text" placeholder="Pregunta..." style="flex:1; padding:8px; border-radius:10px; border:none; background:#0d0d1a; color:#fff; font-size:13px;" autocomplete="off">
+                <button id="nomi-search-btn" style="background:#4a6cf7; border:none; border-radius:10px; padding:8px 12px; color:#fff; font-size:14px; cursor:pointer; margin-right:4px;" title="Forzar búsqueda web de esta pregunta">🔍</button>
+                <button id="nomi-enviar" style="background:#FF6B6B; border:none; border-radius:10px; padding:8px 14px; color:#fff; font-weight:bold; cursor:pointer;">➤</button>
+            </div>
+            <div style="margin-top:6px; display:flex; justify-content:space-between; align-items:center; font-size:9px; color:#555; flex-shrink:0;">
+                <div>
+                    <button id="nomi-lock-toggle" style="background:none; border:none; color:#888; font-size:14px; cursor:pointer; padding:0; z-index:999999;" title="Bloquear/Desbloquear movimiento de la ventana">🔓</button>
+                </div>
+                <div style="display:flex; align-items:center; gap:6px;">
+                    <span id="nomi-ubicacion-display" style="color:#888; font-size:10px;">📍 ${ubicacionActual ? `${ubicacionActual.ciudad}, ${ubicacionActual.pais}` : 'Ubicación desactivada'}</span>
+                    <button id="nomi-ubicacion-update" style="background:none; border:none; color:#4a6cf7; font-size:12px; cursor:pointer; padding:0 4px;" title="Actualizar ubicación">⟳</button>
+                    <span>📊 Tokens: <span id="nomi-token-counter">0</span></span>
+                    <button id="nomi-cerrar-chat" style="background:none; border:none; color:#888; font-size:14px; cursor:pointer; padding:0 6px; margin-left:4px;" title="Cerrar chat">✕</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(win);
+
+        // ======== BOTÓN DE ACTUALIZAR UBICACIÓN ========
+        document.getElementById('nomi-ubicacion-update').onclick = () => {
+            if (ubicacionActivada) {
+                actualizarUbicacion(false);
+            } else {
+                mostrarNotificacionTemporal('📍 La ubicación está desactivada. Actívala en el menú (⚙️).');
+            }
+        };
+
+        // ======== BOTÓN 🔍 ========
+        document.getElementById('nomi-search-btn').onclick = () => {
+            const input = document.getElementById('nomi-input');
+            const texto = input.value.trim();
+            if (texto) {
+                busquedaForzada = true;
+                preguntar(texto);
+            } else {
+                mostrarNotificacionTemporal('Escribe una pregunta antes de usar la lupa.');
+            }
+        };
+
+        // ======== BOTÓN DE BLOQUEO ========
+        const lockToggle = document.getElementById('nomi-lock-toggle');
+        lockToggle.onclick = function(e) {
+            e.stopPropagation();
+            ventanaBloqueada = !ventanaBloqueada;
+            this.textContent = ventanaBloqueada ? '🔒' : '🔓';
+            console.log(ventanaBloqueada ? '🔒 Ventana bloqueada (no se puede mover)' : '🔓 Ventana desbloqueada (se puede mover)');
+        };
+
+        // ======== BOTÓN CERRAR ========
+        document.getElementById('nomi-cerrar-chat').onclick = () => {
+            toggleVentana(false);
+        };
+
+        // ======== ARRASTRE DE LA VENTANA ========
+        let dragStartX, dragStartY, dragOrigLeft, dragOrigTop, isDraggingWin = false;
+
+        win.addEventListener('mousedown', (e) => {
+            if (ventanaBloqueada) return;
+            if (e.target.closest('button') || e.target.closest('input')) return;
+            if (e.clientY - win.getBoundingClientRect().top > 30) return;
+            e.preventDefault();
+            dragStartX = e.clientX;
+            dragStartY = e.clientY;
+            dragOrigLeft = win.offsetLeft;
+            dragOrigTop = win.offsetTop;
+            isDraggingWin = true;
+
+            const onMove = (ev) => {
+                if (!isDraggingWin) return;
+                const dx = ev.clientX - dragStartX;
+                const dy = ev.clientY - dragStartY;
+                let nl = dragOrigLeft + dx;
+                let nt = dragOrigTop + dy;
+                nl = Math.max(0, Math.min(window.innerWidth - win.offsetWidth, nl));
+                nt = Math.max(0, Math.min(window.innerHeight - win.offsetHeight, nt));
+                win.style.left = nl + 'px';
+                win.style.top = nt + 'px';
+                posicionVentana = { x: nl, y: nt };
+                setPosicionVentana(posicionVentana);
+            };
+            const onUp = () => {
+                isDraggingWin = false;
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+
+        win.addEventListener('touchstart', (e) => {
+            if (ventanaBloqueada) return;
+            if (e.target.closest('button') || e.target.closest('input')) return;
+            const touch = e.touches[0];
+            if (touch.clientY - win.getBoundingClientRect().top > 30) return;
+            e.preventDefault();
+            dragStartX = touch.clientX;
+            dragStartY = touch.clientY;
+            dragOrigLeft = win.offsetLeft;
+            dragOrigTop = win.offsetTop;
+            isDraggingWin = true;
+        }, {passive:false});
+
+        win.addEventListener('touchmove', (e) => {
+            if (ventanaBloqueada) return;
+            if (!isDraggingWin) return;
+            const touch = e.touches[0];
+            const dx = touch.clientX - dragStartX;
+            const dy = touch.clientY - dragStartY;
+            let nl = dragOrigLeft + dx;
+            let nt = dragOrigTop + dy;
+            nl = Math.max(0, Math.min(window.innerWidth - win.offsetWidth, nl));
+            nt = Math.max(0, Math.min(window.innerHeight - win.offsetHeight, nt));
+            win.style.left = nl + 'px';
+            win.style.top = nt + 'px';
+            posicionVentana = { x: nl, y: nt };
+            setPosicionVentana(posicionVentana);
+        }, {passive:false});
+
+        win.addEventListener('touchend', () => {
+            isDraggingWin = false;
+        });
+
+        // ======== EVENTOS DE LA VENTANA ========
+        document.getElementById('nomi-enviar').onclick = () => {
+            const input = document.getElementById('nomi-input');
+            preguntar(input.value);
+        };
+
+        document.getElementById('nomi-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                const input = document.getElementById('nomi-input');
+                preguntar(input.value);
+            }
+        });
+
+        document.getElementById('nomi-web-btn').onclick = () => {
+            modoWebActivo = !modoWebActivo;
+            const status = document.getElementById('nomi-web-status');
+            if (modoWebActivo) {
+                status.style.display = 'inline';
+                document.getElementById('nomi-web-btn').style.borderColor = '#34a853';
+                document.getElementById('nomi-web-btn').style.color = '#34a853';
+                agregarMensaje('bot', '🌐 Modo Web activado. La siguiente pregunta incluirá análisis de página.');
+            } else {
+                status.style.display = 'none';
+                document.getElementById('nomi-web-btn').style.borderColor = '#555';
+                document.getElementById('nomi-web-btn').style.color = '#888';
+                agregarMensaje('bot', '🌐 Modo web desactivado.');
+            }
+        };
+
+        document.getElementById('nomi-stats-btn').onclick = () => {
+            mostrarEstadisticas();
+        };
+
+        document.getElementById('nomi-export-btn').onclick = () => {
+            mostrarExportacion();
+        };
+
+        document.getElementById('nomi-menu-btn').onclick = () => {
+            mostrarMenu();
+        };
+
+        actualizarContextoIndicador();
+        actualizarStats();
+        actualizarBarraUbicacion();
+    }
+
+    // ======== PREGUNTAR A LA IA ========
+    async function preguntar(texto) {
+        const input = document.getElementById('nomi-input');
+        if (input) input.value = '';
+
+        if (!texto.trim() || isWaiting) return;
+
+        if (texto.trim() === '!cmd' || texto.trim() === '!comandos') {
+            mostrarAyuda();
+            return;
+        }
+
+        isWaiting = true;
+        document.getElementById('nomi-modelo-display').textContent = '⏳ pensando...';
+
+        if (ubicacionActivada && ubicacionActual) {
+            const ahora = Date.now();
+            if (ahora - ubicacionActual.timestamp > UBICACION_EXPIRACION) {
+                actualizarUbicacion(true);
+            }
+        }
+
+        // ======== DETECTAR COMANDO DE BÚSQUEDA ========
+        const cmdBusqueda = texto.match(/^(investiga|busca|investigar|buscar)\s*[:|]?\s*(.+)/i);
+        let esBusqueda = false;
+        let consulta = '';
+        if (cmdBusqueda) {
+            consulta = cmdBusqueda[2].trim();
+            if (consulta) {
+                esBusqueda = true;
+                if (!busquedaWebActiva) {
+                    busquedaWebTemporal = true;
+                }
+            }
+        }
+
+        if (busquedaForzada) {
+            esBusqueda = true;
+            consulta = texto.trim();
+            busquedaForzada = false;
+            if (!busquedaWebActiva) {
+                busquedaWebTemporal = true;
+            }
+        }
+
+        if (!esBusqueda && busquedaWebActiva && requiereBusqueda(texto)) {
+            esBusqueda = true;
+            consulta = texto.trim();
+            console.log('🔍 Búsqueda automática activada por detección de palabras clave.');
+        }
+
+        if (esBusqueda && consulta) {
+            ocultarCargando();
+            document.getElementById('nomi-modelo-display').textContent = modeloActual;
+            await procesarBusqueda(consulta);
+            if (busquedaWebTemporal) {
+                busquedaWebTemporal = false;
+                console.log('🔍 Búsqueda web temporal desactivada.');
+            }
+            isWaiting = false;
+            return;
+        }
+
+        // ======== ANÁLISIS DE PÁGINA (MODO WEB) ========
+        const palabrasClave = ['analiza', 'examina', 'escanea', 'resume esta página'];
+        const esAnalisis = palabrasClave.some(p => texto.toLowerCase().includes(p));
+        const usarWeb = modoWebActivo || esAnalisis;
+        let infoPagina = '';
+        if (usarWeb) {
+            const limite = modoLigeroActivo ? LIMITE_TEXTO_LIGERO : LIMITE_TEXTO_NORMAL;
+            const info = extraerInformacionPagina(limite);
+            infoPagina = `
+    INFORMACIÓN DE LA PÁGINA ACTUAL:
+    Título: ${info.titulo}
+    URL: ${info.url}
+    Descripción: ${info.metaDesc}
+    Encabezados: ${info.encabezados.join(', ')}
+    Contenido principal (primeros ${limite} caracteres):
+    ${info.texto}
+    ---
+    `;
+            if (modoWebActivo) {
+                modoWebActivo = false;
+                document.getElementById('nomi-web-status').style.display = 'none';
+                document.getElementById('nomi-web-btn').style.borderColor = '#555';
+                document.getElementById('nomi-web-btn').style.color = '#888';
+            }
+        }
+
+        // ======== CONSTRUIR CONTEXTO ========
+        const contextoFechaHora = obtenerContextoTiempo();
+        let contextoUbicacion = '';
+        if (ubicacionActivada && ubicacionActual && requiereUbicacion(texto)) {
+            const fuente = ubicacionActual.fuente === 'gps' ? 'GPS' : 'IP aproximada';
+            contextoUbicacion = `📍 Ubicación del usuario: ${ubicacionActual.ciudad}, ${ubicacionActual.pais} (${fuente}). Coordenadas GPS: ${ubicacionActual.lat}, ${ubicacionActual.lon}. **DEBES usar ESTA ubicación.**`;
+        } else if (ubicacionActivada && !ubicacionActual && requiereUbicacion(texto)) {
+            contextoUbicacion = '📍 Ubicación: no disponible (solicitando...)';
+        }
+
+        const contextoCompleto = contextoUbicacion ? `${contextoFechaHora}\n${contextoUbicacion}` : contextoFechaHora;
+
+        // ======== CONSTRUIR MENSAJES PARA LA IA ========
+        let mensajesParaEnviar = [];
+        if (modoResumenActivo && contextoSeleccionado === 10 && resumenPersistente) {
+            mensajesParaEnviar.push({
+                role: 'system',
+                content: `Resumen de la conversación anterior:\n${resumenPersistente}`
+            });
+        }
+        const limiteMensajes = Math.min(contextoSeleccionado, CONTEXTO_RECIENTE);
+        const mensajesRecientes = historial
+            .filter(m => m.role === 'user' || m.role === 'assistant')
+            .slice(-limiteMensajes);
+        mensajesParaEnviar.push(...mensajesRecientes);
+
+        let mensajeCompleto = texto;
+        if (infoPagina) {
+            mensajeCompleto = infoPagina + '\nPregunta del usuario: ' + texto;
+        }
+
+        const mensajeFinal = `${contextoCompleto}\n\nPregunta del usuario: ${mensajeCompleto}`;
+
+        historial.push({role: 'user', content: texto});
+        guardarHistorial(historial);
+        agregarMensaje('yo', texto);
+
+        const enviar = document.getElementById('nomi-enviar');
+        if (input) input.disabled = true;
+        if (enviar) enviar.disabled = true;
+        mostrarCargando();
+
+        try {
+            const respuesta = await fetch(urlBaseActual + '/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + apiKeyActual,
+                    'HTTP-Referer': window.location.href,
+                    'X-Title': 'NoMi Asistente'
+                },
+                body: JSON.stringify({
+                    model: modeloActual,
+                    messages: [
+                        ...mensajesParaEnviar,
+                        {role: 'user', content: mensajeFinal}
+                    ],
+                    stream: false
+                })
+            });
+            ocultarCargando();
+            const datos = await respuesta.json();
+            if (datos.choices && datos.choices[0]) {
+                const respuestaTexto = datos.choices[0].message.content;
+                document.getElementById('nomi-modelo-display').textContent = modeloActual;
+                if (datos.usage) {
+                    tokens.total += datos.usage.total_tokens || 0;
+                    tokens.input += datos.usage.prompt_tokens || 0;
+                    tokens.output += datos.usage.completion_tokens || 0;
+                    setTokens(tokens);
+                }
+                contadorPreguntas++;
+                setContador(contadorPreguntas);
+                historial.push({role: 'assistant', content: respuestaTexto});
+                guardarHistorial(historial);
+                agregarMensaje('bot', respuestaTexto);
+                actualizarStats();
+                if (modoResumenActivo && contextoSeleccionado === 10) {
+                    setTimeout(() => generarResumen(historial), 100);
+                }
+            } else if (datos.error) {
+                agregarMensaje('bot', '❌ Error: ' + (datos.error.message || JSON.stringify(datos.error)));
+                historial.pop();
+                guardarHistorial(historial);
+                document.getElementById('nomi-modelo-display').textContent = '⚠️ error';
+                registrarError('api', datos.error.message || 'Error desconocido en API', `Modelo: ${modeloActual}`);
+            } else {
+                agregarMensaje('bot', '❌ Error inesperado');
+                historial.pop();
+                guardarHistorial(historial);
+                document.getElementById('nomi-modelo-display').textContent = '⚠️ error';
+                registrarError('script', 'Respuesta inesperada de la API', 'Sin detalles');
+            }
+        } catch (error) {
+            ocultarCargando();
+            agregarMensaje('bot', '❌ Error de conexión: ' + error.message);
+            historial.pop();
+            guardarHistorial(historial);
+            document.getElementById('nomi-modelo-display').textContent = '⚠️ error';
+            registrarError('network', error.message, `URL: ${urlBaseActual}`);
+        }
+        if (input) input.disabled = false;
+        if (enviar) enviar.disabled = false;
+        if (input) input.focus();
+        isWaiting = false;
+    }
+
+    // ======== MENÚ DE CONFIGURACIÓN ========
+    function mostrarMenu() {
+        const existing = document.getElementById('nomi-menu');
+        if (existing) {
+            existing.style.display = existing.style.display === 'block' ? 'none' : 'block';
+            return;
+        }
+        const menu = document.createElement('div');
+        menu.id = 'nomi-menu';
+        menu.style.cssText = `
+            position: fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+            background:#1a1a2e; border-radius:20px; padding:24px; z-index:9999999;
+            color:#fff; border:1px solid #4a4a6a; box-shadow:0 8px 32px rgba(0,0,0,0.9);
+            min-width:280px; max-width:90vw; max-height:80vh; overflow-y:auto;
+        `;
+        const resumenDisabled = contextoSeleccionado !== 10;
+        const esClaveIntegrada = (apiKeyActual === API_KEY_INTEGRADA);
+        const { w, h } = tamanoVentana;
+        const espacioOcupado = calcularEspacioOcupado();
+        const espacioFormateado = espacioOcupado > 1024 ? `${Math.round(espacioOcupado/1024)} KB` : `${espacioOcupado} B`;
+        const logs = JSON.parse(localStorage.getItem(STORAGE_ERROR_LOGS) || '[]');
+
+        menu.innerHTML = `
+            <h2 style="color:#FF6B6B; margin-top:0;">⚙️ Configuración</h2>
+            <div style="margin:10px 0;">
+                <div style="margin-bottom:8px; font-size:11px; color:#555;">
+                    💾 Espacio ocupado: <span style="color:#888;">${espacioFormateado}</span>
+                    ${logs.length > 0 ? ` | 📋 Errores: <span style="color:#f55036;">${logs.length}</span>` : ''}
+                </div>
+                <div style="margin-bottom:12px;">
+                    <label style="display:flex; justify-content:space-between; align-items:center; font-size:14px;">
+                        <span>📍 Ubicación</span>
+                        <input type="checkbox" id="nomi-check-ubicacion" ${ubicacionActivada ? 'checked' : ''}>
+                    </label>
+                    <div style="font-size:11px; color:#888;">Permite a NoMi conocer su ubicación para respuestas más precisas (clima, eventos, etc.).</div>
+                </div>
+                <div style="margin-bottom:12px;">
+                    <label style="display:flex; justify-content:space-between; align-items:center; font-size:14px;">
+                        <span>🌿 Modo Ligero</span>
+                        <input type="checkbox" id="nomi-check-ligero" ${modoLigeroActivo ? 'checked' : ''}>
+                    </label>
+                    <div style="font-size:11px; color:#888;">Reduce el texto extraído de páginas a 500 caracteres.</div>
+                </div>
+                <div style="margin-bottom:12px;">
+                    <label style="font-size:14px; display:block; margin-bottom:4px;">📌 Contexto</label>
+                    <div style="display:flex; gap:8px;">
+                        ${CONTEXTOS_DISPONIBLES.map(c => `
+                            <label style="font-size:13px; display:flex; align-items:center; gap:4px;">
+                                <input type="radio" name="contexto" value="${c}" ${contextoSeleccionado === c ? 'checked' : ''}>
+                                ${c}
+                            </label>
+                        `).join('')}
+                    </div>
+                    <div style="font-size:11px; color:#888;">Número de mensajes enviados al modelo (recomendado: 10).</div>
+                </div>
+                <div style="margin-bottom:12px;">
+                    <label style="display:flex; justify-content:space-between; align-items:center; font-size:14px;">
+                        <span>🧠 Resumen persistente</span>
+                        <input type="checkbox" id="nomi-check-resumen" ${modoResumenActivo ? 'checked' : ''} ${resumenDisabled ? 'disabled' : ''}>
+                    </label>
+                    <div style="font-size:11px; color:#888;">${resumenDisabled ? 'Solo disponible con 10 mensajes.' : 'Guarda un resumen de la conversación para contexto a largo plazo.'}</div>
+                </div>
+                <div style="margin-bottom:12px;">
+                    <label style="font-size:14px; display:block; margin-bottom:4px;">📐 Tamaño de la ventana</label>
+                    <div style="display:flex; gap:8px; margin-top:4px;">
+                        <label>Ancho (px): <input type="number" id="nomi-width-input" value="${w}" min="280" step="10" style="width:70px; padding:4px; border-radius:6px; border:1px solid #555; background:#0d0d1a; color:#fff;"></label>
+                        <label>Alto (px): <input type="number" id="nomi-height-input" value="${h}" min="300" step="10" style="width:70px; padding:4px; border-radius:6px; border:1px solid #555; background:#0d0d1a; color:#fff;"></label>
+                    </div>
+                    <div style="display:flex; gap:6px; margin-top:6px;">
+                        <button id="nomi-size-apply" style="padding:4px 12px; background:#4a6cf7; border:none; border-radius:6px; color:#fff; cursor:pointer;">Aplicar</button>
+                        <button id="nomi-size-default" style="padding:4px 12px; background:#555; border:none; border-radius:6px; color:#fff; cursor:pointer;">Predeterminado</button>
+                    </div>
+                </div>
+                <div style="margin-bottom:12px;">
+                    <label style="display:flex; justify-content:space-between; align-items:center; font-size:14px;">
+                        <span>🔍 Búsqueda web</span>
+                        <input type="checkbox" id="nomi-check-busqueda" ${busquedaWebActiva ? 'checked' : ''} ${esClaveIntegrada ? '' : 'disabled'}>
+                    </label>
+                    <div style="font-size:11px; color:#888;">${esClaveIntegrada ? 'Activa la búsqueda web automática (detección de palabras clave).' : 'Solo disponible con la clave integrada de la app (contraseña 20092017).'}</div>
+                </div>
+                <button id="nomi-menu-restaurar" style="width:100%; padding:10px; background:#555; border:none; border-radius:10px; color:#fff; font-size:14px; cursor:pointer; margin-bottom:8px;">🔄 Restaurar posición</button>
+                <button id="nomi-menu-limpiar" style="width:100%; padding:10px; background:#f55036; border:none; border-radius:10px; color:#fff; font-size:14px; cursor:pointer; margin-bottom:8px;">🗑️ Limpiar datos antiguos</button>
+                <button id="nomi-menu-exportar-logs" style="width:100%; padding:10px; background:#4a6cf7; border:none; border-radius:10px; color:#fff; font-size:14px; cursor:pointer; margin-bottom:8px;">📤 Exportar logs de error</button>
+                <button id="nomi-menu-eliminar-global" style="width:100%; padding:10px; background:#f55036; border:none; border-radius:10px; color:#fff; font-size:14px; cursor:pointer; margin-bottom:8px;">🗑️ Eliminar datos globales</button>
+                <button id="nomi-menu-cerrar-sesion" style="width:100%; padding:10px; background:#f55036; border:none; border-radius:10px; color:#fff; font-size:14px; cursor:pointer; margin-bottom:8px;">🚪 Cerrar sesión</button>
+                <button id="nomi-menu-cerrar" style="width:100%; padding:10px; background:none; border:none; color:#888; font-size:14px; cursor:pointer;">Cerrar</button>
+            </div>
+            <div style="margin-top:16px; padding-top:12px; border-top:1px solid #333; font-size:11px; color:#555; text-align:center;">
+                ℹ️ <b>Acerca de NoMi</b>
+                <br>Asistente IA desarrollado por <b>${DISEÑADOR}</b>
+                <br>Powered by <b>OpenRouter</b> & <b>Tavily</b>
+                <br>Modelo: <b>${modeloActual}</b>
+                <br>Versión: <b>${VERSION_SCRIPT}</b> (${FECHA_LANZAMIENTO})
+                <br><span style="color:#444;">ℹ️ En páginas de configuración de Google (accounts.google.com), la burbuja puede no aparecer. Vuelva a la página anterior o recargue.</span>
+            </div>
+        `;
+        document.body.appendChild(menu);
+
+        // ======== EVENTOS DEL MENÚ ========
+        document.getElementById('nomi-menu-cerrar').onclick = () => menu.remove();
+
+        // Ubicación
+        document.getElementById('nomi-check-ubicacion').onchange = (e) => {
+            ubicacionActivada = e.target.checked;
+            setUbicacionActivada(ubicacionActivada);
+            if (ubicacionActivada) {
+                if (!ubicacionActual) {
+                    actualizarUbicacion(false);
+                } else {
+                    mostrarNotificacionTemporal(`📍 Ubicación activada: ${ubicacionActual.ciudad}, ${ubicacionActual.pais}`);
+                }
+            } else {
+                if (ubicacionActual && confirm('¿Quieres eliminar la ubicación guardada?')) {
+                    localStorage.removeItem(STORAGE_UBICACION);
+                    ubicacionActual = null;
+                    mostrarNotificacionTemporal('📍 Ubicación eliminada.');
+                }
+            }
+            actualizarBarraUbicacion();
+            menu.remove();
+        };
+
+        // Limpieza manual
+        document.getElementById('nomi-menu-limpiar').onclick = () => {
+            if (confirm('¿Eliminar todos los historiales de más de 7 días? Esta acción no se puede deshacer.')) {
+                const resultado = limpiarHistorialesAntiguos();
+                mostrarNotificacionTemporal(`🧹 ${resultado.eliminados} historiales eliminados. Espacio liberado: ~${Math.round(resultado.espacioLiberado/1024)} KB`);
+                menu.remove();
+            }
+        };
+
+        // Exportar logs
+        document.getElementById('nomi-menu-exportar-logs').onclick = () => {
+            exportarLogs();
+            menu.remove();
+        };
+
+        // ======== ELIMINAR DATOS GLOBALES ========
+        document.getElementById('nomi-menu-eliminar-global').onclick = () => {
+            const dialog = document.createElement('div');
+            dialog.id = 'nomi-dialog-global';
+            dialog.style.cssText = `
+                position: fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+                background:#1a1a2e; border-radius:20px; padding:24px; z-index:99999999;
+                color:#fff; border:1px solid #4a4a6a; box-shadow:0 8px 32px rgba(0,0,0,0.9);
+                min-width:280px; max-width:90vw; max-height:80vh; overflow-y:auto;
+            `;
+            dialog.innerHTML = `
+                <h3 style="color:#FF6B6B; margin-top:0;">🗑️ Eliminar datos globales</h3>
+                <p style="font-size:13px; color:#888;">Seleccione qué datos desea eliminar:</p>
+                <div style="margin:12px 0;">
+                    <label style="display:block; margin:6px 0; font-size:13px;">
+                        <input type="checkbox" id="nomi-del-historiales" checked> 📁 Historiales de chat (todos los dominios)
+                    </label>
+                    <label style="display:block; margin:6px 0; font-size:13px;">
+                        <input type="checkbox" id="nomi-del-config" checked> ⚙️ Configuración (contexto, modos)
+                    </label>
+                    <label style="display:block; margin:6px 0; font-size:13px;">
+                        <input type="checkbox" id="nomi-del-ubicacion" checked> 📍 Ubicación guardada
+                    </label>
+                    <label style="display:block; margin:6px 0; font-size:13px;">
+                        <input type="checkbox" id="nomi-del-logs" checked> 📋 Logs de errores
+                    </label>
+                    <label style="display:block; margin:6px 0; font-size:13px;">
+                        <input type="checkbox" id="nomi-del-posicion" checked> 📐 Tamaño y posición de ventana
+                    </label>
+                    <label style="display:block; margin:6px 0; font-size:13px;">
+                        <input type="checkbox" id="nomi-del-tokens" checked> 📊 Estadísticas de tokens
+                    </label>
+                </div>
+                <div style="display:flex; gap:8px; margin-top:16px;">
+                    <button id="nomi-dialog-confirmar" style="flex:1; padding:10px; background:#f55036; border:none; border-radius:10px; color:#fff; font-size:14px; cursor:pointer;">Eliminar seleccionados</button>
+                    <button id="nomi-dialog-cancelar" style="flex:1; padding:10px; background:#333; border:none; border-radius:10px; color:#fff; font-size:14px; cursor:pointer;">Cancelar</button>
+                </div>
+            `;
+            document.body.appendChild(dialog);
+
+            document.getElementById('nomi-dialog-cancelar').onclick = () => dialog.remove();
+            document.getElementById('nomi-dialog-confirmar').onclick = () => {
+                const eliminarHistoriales = document.getElementById('nomi-del-historiales').checked;
+                const eliminarConfig = document.getElementById('nomi-del-config').checked;
+                const eliminarUbicacion = document.getElementById('nomi-del-ubicacion').checked;
+                const eliminarLogs = document.getElementById('nomi-del-logs').checked;
+                const eliminarPosicion = document.getElementById('nomi-del-posicion').checked;
+                const eliminarTokens = document.getElementById('nomi-del-tokens').checked;
+
+                const keysToRemove = [];
+                const keys = Object.keys(localStorage);
+                keys.forEach(key => {
+                    if (key.startsWith('nomi_')) {
+                        if (eliminarHistoriales && key.startsWith('nomi_historial_')) {
+                            keysToRemove.push(key);
+                        } else if (eliminarConfig && (
+                            key === STORAGE_CONTEXTO ||
+                            key === STORAGE_MODO_LIGERO ||
+                            key === STORAGE_MODO_RESUMEN ||
+                            key === STORAGE_BUSQUEDA_WEB ||
+                            key === STORAGE_TAMANO_VENTANA ||
+                            key === STORAGE_VALIDADO ||
+                            key === STORAGE_API_KEY ||
+                            key === STORAGE_MODELO ||
+                            key === STORAGE_URL
+                        )) {
+                            keysToRemove.push(key);
+                        } else if (eliminarUbicacion && (key === STORAGE_UBICACION || key === STORAGE_UBICACION_ACTIVADA)) {
+                            keysToRemove.push(key);
+                        } else if (eliminarLogs && key === STORAGE_ERROR_LOGS) {
+                            keysToRemove.push(key);
+                        } else if (eliminarPosicion && (key === STORAGE_POSICION || key === STORAGE_POSICION_VENTANA)) {
+                            keysToRemove.push(key);
+                        } else if (eliminarTokens && (key === STORAGE_TOKENS || key === STORAGE_CONTADOR || key === STORAGE_RESUMEN)) {
+                            keysToRemove.push(key);
+                        }
+                        if (eliminarHistoriales && key.startsWith('nomi_chats_list_')) {
+                            keysToRemove.push(key);
+                        }
+                    }
+                });
+
+                if (keysToRemove.length === 0) {
+                    mostrarNotificacionTemporal('No hay datos seleccionados para eliminar.');
+                    dialog.remove();
+                    return;
+                }
+
+                if (confirm(`¿Eliminar ${keysToRemove.length} elemento(s)? Esta acción no se puede deshacer.`)) {
+                    keysToRemove.forEach(key => localStorage.removeItem(key));
+                    mostrarNotificacionTemporal(`✅ ${keysToRemove.length} elemento(s) eliminado(s). La página se recargará.`);
+                    dialog.remove();
+                    setTimeout(() => location.reload(), 1500);
+                }
+            };
+            menu.remove();
+        };
+
+        document.getElementById('nomi-menu-cerrar-sesion').onclick = () => {
+            if (confirm('¿Cerrar sesión? Se borrarán los datos de validación.')) {
+                setValidado(false);
+                localStorage.removeItem(STORAGE_API_KEY);
+                localStorage.removeItem(STORAGE_MODELO);
+                localStorage.removeItem(STORAGE_URL);
+                localStorage.removeItem(STORAGE_POSICION);
+                localStorage.removeItem(STORAGE_POSICION_VENTANA);
+                localStorage.removeItem(STORAGE_RESUMEN);
+                localStorage.removeItem(STORAGE_TOKENS);
+                localStorage.removeItem(STORAGE_CONTADOR);
+                localStorage.removeItem(STORAGE_CONTEXTO);
+                localStorage.removeItem(STORAGE_MODO_LIGERO);
+                localStorage.removeItem(STORAGE_MODO_RESUMEN);
+                localStorage.removeItem(STORAGE_BUSQUEDA_WEB);
+                localStorage.removeItem(STORAGE_TAMANO_VENTANA);
+                localStorage.removeItem(STORAGE_UBICACION);
+                localStorage.removeItem(STORAGE_UBICACION_ACTIVADA);
+                localStorage.removeItem(STORAGE_ERROR_LOGS);
+                const keys = Object.keys(localStorage).filter(k => k.startsWith('nomi_historial_'));
+                keys.forEach(k => localStorage.removeItem(k));
+                location.reload();
+            }
+        };
+
+        document.getElementById('nomi-menu-restaurar').onclick = () => {
+            const { w, h } = obtenerTamanoReal();
+            const win = document.getElementById('nomi-chat');
+            if (win) {
+                win.style.width = w + 'px';
+                win.style.height = h + 'px';
+                const left = window.innerWidth - w - 20;
+                const top = window.innerHeight - h - 90;
+                win.style.left = left + 'px';
+                win.style.top = top + 'px';
+                posicionVentana = { x: left, y: top };
+                setPosicionVentana(posicionVentana);
+            }
+            menu.remove();
+            mostrarNotificacionTemporal('✅ Posición restaurada.');
+        };
+
+        // Tamaño de ventana
+        document.getElementById('nomi-size-apply').onclick = () => {
+            const w = parseInt(document.getElementById('nomi-width-input').value);
+            const h = parseInt(document.getElementById('nomi-height-input').value);
+            if (w < MIN_WIDTH || h < MIN_HEIGHT) {
+                mostrarNotificacionTemporal(`❌ El mínimo es ${MIN_WIDTH}x${MIN_HEIGHT}.`);
+                return;
+            }
+            setTamanoVentana({ w, h });
+            const win = document.getElementById('nomi-chat');
+            if (win) {
+                win.style.width = w + 'px';
+                win.style.height = h + 'px';
+                const left = Math.max(0, Math.min(window.innerWidth - w, win.offsetLeft));
+                const top = Math.max(0, Math.min(window.innerHeight - h, win.offsetTop));
+                win.style.left = left + 'px';
+                win.style.top = top + 'px';
+                posicionVentana = { x: left, y: top };
+                setPosicionVentana(posicionVentana);
+            }
+            menu.remove();
+            mostrarNotificacionTemporal(`✅ Tamaño aplicado: ${w}x${h}`);
+        };
+
+        document.getElementById('nomi-size-default').onclick = () => {
+            setTamanoVentana({ w: ANCHO_POR_DEFECTO, h: ALTO_POR_DEFECTO });
+            const win = document.getElementById('nomi-chat');
+            if (win) {
+                const { w, h } = obtenerTamanoReal();
+                win.style.width = w + 'px';
+                win.style.height = h + 'px';
+                const left = window.innerWidth - w - 20;
+                const top = window.innerHeight - h - 90;
+                win.style.left = left + 'px';
+                win.style.top = top + 'px';
+                posicionVentana = { x: left, y: top };
+                setPosicionVentana(posicionVentana);
+            }
+            menu.remove();
+            mostrarNotificacionTemporal(`✅ Tamaño predeterminado restaurado.`);
+        };
+
+        // Contexto
+        document.querySelectorAll('input[name="contexto"]').forEach(el => {
+            el.onchange = () => {
+                contextoSeleccionado = parseInt(el.value);
+                setContexto(contextoSeleccionado);
+                const resumenCheck = document.getElementById('nomi-check-resumen');
+                if (contextoSeleccionado !== 10) {
+                    resumenCheck.disabled = true;
+                    resumenCheck.checked = false;
+                    setModoResumen(false);
+                    modoResumenActivo = false;
+                } else {
+                    resumenCheck.disabled = false;
+                }
+                actualizarContextoIndicador();
+                menu.remove();
+                mostrarNotificacionTemporal(`✅ Contexto actualizado a ${contextoSeleccionado} mensajes.`);
+            };
+        });
+
+        // Modo Ligero
+        document.getElementById('nomi-check-ligero').onchange = (e) => {
+            modoLigeroActivo = e.target.checked;
+            setModoLigero(modoLigeroActivo);
+            menu.remove();
+            mostrarNotificacionTemporal(`✅ Modo ligero ${modoLigeroActivo ? 'activado' : 'desactivado'}.`);
+        };
+
+        // Resumen persistente
+        document.getElementById('nomi-check-resumen').onchange = (e) => {
+            if (contextoSeleccionado !== 10) {
+                e.target.checked = false;
+                return;
+            }
+            modoResumenActivo = e.target.checked;
+            setModoResumen(modoResumenActivo);
+            if (modoResumenActivo && !resumenPersistente) {
+                generarResumen(historial);
+            }
+            actualizarContextoIndicador();
+            menu.remove();
+            mostrarNotificacionTemporal(`🧠 Resumen persistente ${modoResumenActivo ? 'activado' : 'desactivado'}.`);
+        };
+
+        // Búsqueda web
+        document.getElementById('nomi-check-busqueda').onchange = (e) => {
+            if (!esClaveIntegrada) {
+                e.target.checked = false;
+                return;
+            }
+            busquedaWebActiva = e.target.checked;
+            setBusquedaWeb(busquedaWebActiva);
+            menu.remove();
+            mostrarNotificacionTemporal(`🔍 Búsqueda web ${busquedaWebActiva ? 'activada' : 'desactivada'}.`);
+        };
+    }
+
+    // ======== ESTADÍSTICAS ========
+    function mostrarEstadisticas() {
+        const existing = document.getElementById('nomi-stats-panel');
+        if (existing) {
+            existing.style.display = existing.style.display === 'block' ? 'none' : 'block';
+            return;
+        }
+        const div = document.createElement('div');
+        div.id = 'nomi-stats-panel';
+        div.style.cssText = `
+            position: fixed; top:20px; right:20px; background:#1a1a2e; color:#fff;
+            padding:16px; border-radius:16px; font-family:monospace; font-size:13px;
+            z-index:9999998; border:1px solid #4a4a6a; max-width:280px;
+            box-shadow:0 8px 32px rgba(0,0,0,0.8);
+        `;
+        const timestamp = localStorage.getItem('nomi_timestamp_' + getPageKey());
+        let diasRestantes = DIAS_HISTORIAL;
+        if (timestamp) {
+            const diasPasados = (Date.now() - parseInt(timestamp)) / (1000 * 60 * 60 * 24);
+            diasRestantes = Math.max(0, Math.round(DIAS_HISTORIAL - diasPasados));
+        }
+        const resumenPreview = resumenPersistente ? resumenPersistente.slice(0,150)+'...' : 'No hay resumen guardado.';
+        const espacioOcupado = calcularEspacioOcupado();
+        const espacioFormateado = espacioOcupado > 1024 ? `${Math.round(espacioOcupado/1024)} KB` : `${espacioOcupado} B`;
+        const logs = JSON.parse(localStorage.getItem(STORAGE_ERROR_LOGS) || '[]');
+        div.innerHTML = `
+            <b style="font-size:14px;">📊 Estadísticas</b>
+            <div style="margin-top:10px; line-height:1.8;">
+                Preguntas: ${contadorPreguntas}<br>
+                Tokens totales: ${tokens.total}<br>
+                Tokens entrada: ${tokens.input}<br>
+                Tokens salida: ${tokens.output}<br>
+                Mensajes guardados: ${historial.length}<br>
+                Reinicio en: ${diasRestantes} días<br>
+                💾 Espacio: ${espacioFormateado}<br>
+                ${logs.length > 0 ? `📋 Errores registrados: ${logs.length}` : ''}
+            </div>
+            <div style="margin-top:8px; font-size:11px; color:#888; border-top:1px solid #333; padding-top:8px; max-height:80px; overflow-y:auto;">
+                🧠 Resumen: ${resumenPreview}
+            </div>
+            <button id="nomi-stats-close" style="margin-top:10px; background:#333; border:none; padding:6px 12px; border-radius:6px; color:#fff; cursor:pointer;">Cerrar</button>
+        `;
+        document.body.appendChild(div);
+        document.getElementById('nomi-stats-close').onclick = () => div.remove();
+    }
+
+    // ======== EXPORTACIÓN ========
+    function mostrarExportacion() {
+        const existing = document.getElementById('nomi-export-panel');
+        if (existing) {
+            existing.style.display = existing.style.display === 'block' ? 'none' : 'block';
+            return;
+        }
+        const keys = Object.keys(localStorage).filter(k => k.startsWith('nomi_historial_'));
+        const fechas = keys.map(k => k.replace('nomi_historial_', '').split('_')[1])
+            .filter((v,i,a) => a.indexOf(v)===i).sort();
+        const div = document.createElement('div');
+        div.id = 'nomi-export-panel';
+        div.style.cssText = `
+            position: fixed; top:20px; right:20px; background:#1a1a2e; color:#fff;
+            padding:16px; border-radius:16px; font-family:sans-serif; font-size:13px;
+            z-index:9999998; border:1px solid #4a4a6a; max-width:280px; max-height:300px;
+            overflow-y:auto; box-shadow:0 8px 32px rgba(0,0,0,0.8);
+        `;
+        let html = `<b style="font-size:14px;">📤 Exportar Chat</b><div style="margin-top:10px;">`;
+        if (fechas.length === 0) {
+            html += '<div style="color:#555;">No hay chats guardados.</div>';
+        } else {
+            fechas.forEach(fecha => {
+                const esHoy = fecha === new Date().toISOString().slice(0,10);
+                html += `
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin:4px 0;">
+                        <span style="color:${esHoy ? '#34a853' : '#ccc'}; font-weight:${esHoy ? 'bold' : 'normal'};">${fecha} ${esHoy ? '⭐ Hoy' : ''}</span>
+                        <div>
+                            <button data-fecha="${fecha}" data-formato="txt" style="background:#4a6cf7; border:none; padding:2px 8px; border-radius:4px; color:#fff; cursor:pointer; font-size:10px; margin-right:4px;">TXT</button>
+                            <button data-fecha="${fecha}" data-formato="json" style="background:#34a853; border:none; padding:2px 8px; border-radius:4px; color:#fff; cursor:pointer; font-size:10px;">JSON</button>
+                        </div>
+                    </div>
+                `;
+            });
+        }
+        html += `</div><button id="nomi-export-close" style="margin-top:10px; background:#333; border:none; padding:6px 12px; border-radius:6px; color:#fff; cursor:pointer;">Cerrar</button>`;
+        div.innerHTML = html;
+        document.body.appendChild(div);
+        div.querySelectorAll('button[data-fecha]').forEach(btn => {
+            btn.onclick = () => {
+                const fecha = btn.dataset.fecha;
+                const formato = btn.dataset.formato;
+                exportarChat(fecha, formato);
+            };
+        });
+        document.getElementById('nomi-export-close').onclick = () => div.remove();
+    }
+
+    function exportarChat(fecha, formato) {
+        const key = 'nomi_historial_' + getPageKey() + '_' + fecha;
+        const data = localStorage.getItem(key);
+        if (!data) { alert('No hay historial para esa fecha.'); return; }
+        const historialData = JSON.parse(data);
+        let contenido = '';
+        if (formato === 'json') {
+            contenido = JSON.stringify(historialData, null, 2);
+        } else {
+            contenido = historialData.map(m => {
+                const rol = m.role === 'user' ? '👤 Tú' : `🤖 ${NOMBRE_ASISTENTE}`;
+                return `${rol}: ${m.content}`;
+            }).join('\n\n');
+        }
+        const blob = new Blob([contenido], {type: formato === 'json' ? 'application/json' : 'text/plain;charset=utf-8'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `chat_${fecha}.${formato}`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    // ======== FUNCIONES DE NOTIFICACIÓN Y TOGGLE ========
+    function mostrarNotificacionTemporal(msg) {
+        const div = document.createElement('div');
+        div.style.cssText = `
+            position: fixed; bottom:100px; left:50%; transform:translateX(-50%);
+            background:#1a1a2e; color:#fff; padding:12px 20px; border-radius:12px;
+            font-size:14px; z-index:9999999; border:1px solid #4a4a6a;
+            box-shadow:0 4px 16px rgba(0,0,0,0.5); text-align:center; max-width:80%;
+        `;
+        div.textContent = msg;
+        document.body.appendChild(div);
+        setTimeout(() => div.remove(), 3000);
+    }
+
+    function toggleBurbuja(mostrar) {
+        const bubble = document.getElementById('nomi-bubble');
+        if (!bubble) return;
+        if (mostrar === undefined) burbujaVisible = !burbujaVisible;
+        else burbujaVisible = mostrar;
+        bubble.style.display = burbujaVisible ? 'flex' : 'none';
+    }
+
+    function toggleVentana(mostrar) {
+        const win = document.getElementById('nomi-chat');
+        if (!win) return;
+        if (mostrar === undefined) ventanaAbierta = !ventanaAbierta;
+        else ventanaAbierta = mostrar;
+        win.style.display = ventanaAbierta ? 'flex' : 'none';
+        if (ventanaAbierta) {
+            document.getElementById('nomi-input').focus();
+            cargarHistorial();
+        }
+    }
+
+    // ======== FUNCIONES DEL CHAT ========
+    function agregarMensaje(quien, texto) {
+        const chatBody = document.getElementById('nomi-chat-body');
+        if (!chatBody) return;
+        const color = quien === 'yo' ? '#FF6B6B' : '#34a853';
+        const nombre = quien === 'yo' ? 'Tú' : NOMBRE_ASISTENTE;
+        const msg = document.createElement('div');
+        msg.style.cssText = `
+            margin:4px 0; padding:6px 10px; border-radius:10px;
+            background:${color}33; border-left:3px solid ${color};
+            font-size:12px; word-wrap:break-word;
+        `;
+        msg.innerHTML = `<b style="color:${color};">${nombre}:</b> ${texto}`;
+        chatBody.appendChild(msg);
+        chatBody.scrollTop = chatBody.scrollHeight;
+    }
+
+    function cargarHistorial() {
+        const chatBody = document.getElementById('nomi-chat-body');
+        if (!chatBody) return;
+        chatBody.innerHTML = '';
+        const mensajesMostrar = historial
+            .filter(msg => msg.role !== 'system')
+            .slice(-MENSAJES_VISIBLES);
+        if (mensajesMostrar.length === 0) {
+            const empty = document.createElement('div');
+            empty.style.cssText = 'color:#666; text-align:center; padding:20px 0;';
+            empty.textContent = '💬 Sin mensajes aún. ¡Pregunta algo!';
+            chatBody.appendChild(empty);
+            return;
+        }
+        mensajesMostrar.forEach(msg => {
+            const esUsuario = msg.role === 'user';
+            const color = esUsuario ? '#FF6B6B' : '#34a853';
+            const nombre = esUsuario ? 'Tú' : NOMBRE_ASISTENTE;
+            const msgDiv = document.createElement('div');
+            msgDiv.style.cssText = `
+                margin:4px 0; padding:6px 10px; border-radius:10px;
+                background:${color}33; border-left:3px solid ${color};
+                font-size:12px; word-wrap:break-word;
+            `;
+            msgDiv.innerHTML = `<b style="color:${color};">${nombre}:</b> ${msg.content}`;
+            chatBody.appendChild(msgDiv);
+        });
+        chatBody.scrollTop = chatBody.scrollHeight;
+    }
+
+    function actualizarContextoIndicador() {
+        const el = document.getElementById('nomi-contexto-indicador');
+        if (el) {
+            let texto = `📚 Contexto: ${contextoSeleccionado} mensajes`;
+            if (modoResumenActivo && contextoSeleccionado === 10) texto += ' + resumen';
+            el.textContent = texto;
+        }
+    }
+
+    function actualizarStats() {
+        const counter = document.getElementById('nomi-token-counter');
+        if (counter) counter.textContent = tokens.total;
+        const modelDisplay = document.getElementById('nomi-modelo-display');
+        if (modelDisplay) modelDisplay.textContent = modeloActual;
+        actualizarContextoIndicador();
+        actualizarBarraUbicacion();
+    }
+
+    function extraerInformacionPagina(limite) {
+        const titulo = document.title || 'Sin título';
+        const url = window.location.href;
+        const metaDesc = document.querySelector('meta[name="description"]')?.content || 'Sin descripción';
+        const main = document.querySelector('main') || document.querySelector('article');
+        const cuerpo = (main?.innerText || document.body.innerText || document.body.textContent || '')
+            .replace(/\s+/g, ' ').replace(/\n/g, ' ').trim().slice(0, limite);
+        const encabezados = [];
+        document.querySelectorAll('h1, h2, h3').forEach(h => encabezados.push(h.textContent.trim()));
+        return { titulo, url, metaDesc, texto: cuerpo, encabezados: encabezados.slice(0,10) };
+    }
+
+    function mostrarCargando() {
+        const loading = document.getElementById('nomi-loading');
+        if (loading) {
+            loading.style.display = 'block';
+            let count = 0;
+            const dots = document.getElementById('nomi-dots');
+            if (dots) {
+                const interval = setInterval(() => {
+                    count = (count % 3) + 1;
+                    dots.textContent = '.'.repeat(count);
+                }, 400);
+                loading.dataset.interval = interval;
+            }
+        }
+    }
+    function ocultarCargando() {
+        const loading = document.getElementById('nomi-loading');
+        if (loading) {
+            loading.style.display = 'none';
+            if (loading.dataset.interval) {
+                clearInterval(parseInt(loading.dataset.interval));
+                delete loading.dataset.interval;
+            }
+        }
+    }
+
+    async function generarResumen(historialCompleto) {
+        if (!modoResumenActivo || contextoSeleccionado !== 10 || historialCompleto.length < 4) return;
+        try {
+            const respuesta = await fetch(urlBaseActual + '/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + apiKeyActual
+                },
+                body: JSON.stringify({
+                    model: modeloActual,
+                    messages: [
+                        {
+                            role: 'system',
+                            content: 'Eres un asistente que resume conversaciones. Genera un resumen COMPACTO (máximo 300 palabras) de toda la conversación. Incluye temas principales y decisiones. Responde SOLO con el resumen.'
+                        },
+                        {
+                            role: 'user',
+                            content: `Resume esta conversación:\n\n${historialCompleto.map(m => `${m.role === 'user' ? 'Usuario' : 'Asistente'}: ${m.content}`).join('\n')}`
+                        }
+                    ],
+                    stream: false,
+                    max_tokens: 500
+                })
+            });
+            const datos = await respuesta.json();
+            if (datos.choices && datos.choices[0]) {
+                setResumen(datos.choices[0].message.content);
+                console.log('🧠 Resumen actualizado.');
+            }
+        } catch (error) {
+            registrarError('api', error.message, 'Generación de resumen');
+            console.log('⚠️ Error generando resumen:', error.message);
+        }
+    }
+
+    // ======== INICIO ========
+    setTimeout(() => {
+        setApiKey(API_KEY_INTEGRADA);
+        setUrlBase(URL_BASE_INTEGRADA);
+        setModelo(MODELO_INTEGRADO);
+        apiKeyActual = API_KEY_INTEGRADA;
+        urlBaseActual = URL_BASE_INTEGRADA;
+        modeloActual = MODELO_INTEGRADO;
+        setValidado(true);
+        validado = true;
+        iniciarAsistente();
+    }, 500);
+})();
