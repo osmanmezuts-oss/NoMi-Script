@@ -9,8 +9,8 @@
 // @grant        GM_getValue
 // @grant        GM_deleteValue
 // @grant        GM_registerMenuCommand
-// @updateURL    https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/refs/heads/main/NoMi%20V5.6%20ESTABLE.txt?token=GHSAT0AAAAAAEASBTP5SS2YOOFXFJTLWOCS2RYHGHA
-// @downloadURL  https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/refs/heads/main/NoMi%20V5.6%20ESTABLE.txt?token=GHSAT0AAAAAAEASBTP5SS2YOOFXFJTLWOCS2RYHGHA
+// @updateURL    https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/main/NoMi%20Asistente%20V5.8.txt
+// @downloadURL  https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/main/NoMi%20Asistente%20V5.8.txt
 // ==/UserScript==
 
 (function() {
@@ -19,8 +19,8 @@
     // ======== CONFIGURACIÓN ========
     const NOMBRE_ASISTENTE = 'NoMi';
     const DISEÑADOR = 'Gartos';
-    const MODELO_INTEGRADO = 'openai/gpt-oss-120b:free';
-    const URL_BASE_INTEGRADA = 'https://openrouter.ai/api/v1';
+    const MODELO_POR_DEFECTO = 'openai/gpt-oss-120b:free';
+    const URL_BASE_POR_DEFECTO = 'https://openrouter.ai/api/v1';
     const DIAS_HISTORIAL = 7;
     const LIMITE_TEXTO_NORMAL = 2000;
     const LIMITE_TEXTO_LIGERO = 500;
@@ -39,6 +39,22 @@
     const VERSION_SCRIPT = '5.8';
     const FECHA_LANZAMIENTO = '21/06/2026';
 
+    // ======== DETECCIÓN DE SISTEMA ========
+    function obtenerInfoSistema() {
+        const ua = navigator.userAgent;
+        let platform = 'Desconocido';
+        if (/windows/i.test(ua)) platform = 'Windows';
+        else if (/macintosh|mac os x/i.test(ua)) platform = 'macOS';
+        else if (/linux/i.test(ua)) platform = 'Linux';
+        else if (/android/i.test(ua)) platform = 'Android';
+        else if (/iphone|ipad|ipod/i.test(ua)) platform = 'iOS';
+
+        const isMobile = /mobile/i.test(ua) || window.innerWidth < 768;
+        const screenSize = `${window.innerWidth}x${window.innerHeight}`;
+
+        return { platform, isMobile, userAgent: ua, screenSize };
+    }
+
     // ======== ESTADO GLOBAL ========
     let modoWebActivo = false;
     let modoResumenActivo = false;
@@ -48,8 +64,8 @@
     let ubicacionActivada = false;
     let contextoSeleccionado = 10;
     let resumenPersistente = '';
-    let modeloActual = MODELO_INTEGRADO;
-    let urlBaseActual = URL_BASE_INTEGRADA;
+    let modeloActual = MODELO_POR_DEFECTO;
+    let urlBaseActual = URL_BASE_POR_DEFECTO;
     let burbujaVisible = false;
     let ventanaAbierta = false;
     let validado = false;
@@ -68,6 +84,8 @@
     let credencialesCargadas = false;
     let apiKeyActual = '';
     let tavilyKeyActual = '';
+    let configuracionInicialCompletada = false;
+    let motorBusqueda = 'tavily';
 
     // ======== CLAVES LOCALSTORAGE ========
     const STORAGE_VALIDADO = 'nomi_validado';
@@ -89,8 +107,10 @@
     const STORAGE_UBICACION_ACTIVADA = 'nomi_ubicacion_activada';
     const STORAGE_ERROR_LOGS = 'nomi_error_logs';
     const STORAGE_CREDENCIALES_CARGADAS = 'nomi_credenciales_cargadas';
+    const STORAGE_CONFIG_INICIAL = 'nomi_config_inicial';
+    const STORAGE_MOTOR_BUSQUEDA = 'nomi_motor_busqueda';
 
-    // ======== FUNCIONES DE PERSISTENCIA CON GM_setValue ========
+    // ======== FUNCIONES DE PERSISTENCIA ========
     function getValor(clave, defecto) {
         try {
             if (typeof GM_getValue !== 'undefined') {
@@ -145,9 +165,9 @@
 
     function getValidado() { return getValor(STORAGE_VALIDADO, false); }
     function setValidado(v) { setValor(STORAGE_VALIDADO, v); }
-    function getModelo() { return getValor(STORAGE_MODELO, MODELO_INTEGRADO); }
+    function getModelo() { return getValor(STORAGE_MODELO, MODELO_POR_DEFECTO); }
     function setModelo(m) { setValor(STORAGE_MODELO, m); modeloActual = m; }
-    function getUrlBase() { return getValor(STORAGE_URL, URL_BASE_INTEGRADA); }
+    function getUrlBase() { return getValor(STORAGE_URL, URL_BASE_POR_DEFECTO); }
     function setUrlBase(u) { setValor(STORAGE_URL, u); urlBaseActual = u; }
     function getPosicion() { return getValor(STORAGE_POSICION, { x: 20, y: 20 }); }
     function setPosicion(p) { setValor(STORAGE_POSICION, p); }
@@ -191,18 +211,24 @@
     function setApiKey(k) { setValor(STORAGE_API_KEY, k); apiKeyActual = k; }
     function getTavilyKey() { return getValor(STORAGE_TAVILY_KEY, ''); }
     function setTavilyKey(k) { setValor(STORAGE_TAVILY_KEY, k); tavilyKeyActual = k; }
+    function getConfigInicial() { return getValor(STORAGE_CONFIG_INICIAL, false); }
+    function setConfigInicial(v) { setValor(STORAGE_CONFIG_INICIAL, v); configuracionInicialCompletada = v; }
+    function getMotorBusqueda() { return getValor(STORAGE_MOTOR_BUSQUEDA, 'tavily'); }
+    function setMotorBusqueda(m) { setValor(STORAGE_MOTOR_BUSQUEDA, m); motorBusqueda = m; }
 
     // ======== FUNCIONES DE LOGS ========
     function registrarError(tipo, mensaje, contexto) {
         try {
             const logs = getValor(STORAGE_ERROR_LOGS, []);
+            const sistema = obtenerInfoSistema();
             const entrada = {
                 timestamp: new Date().toISOString(),
                 type: tipo,
                 message: mensaje,
                 context: contexto || 'Sin contexto adicional',
                 version: VERSION_SCRIPT,
-                url: window.location.href
+                url: window.location.href,
+                sistema: sistema
             };
             logs.push(entrada);
             if (logs.length > 20) logs.shift();
@@ -229,6 +255,9 @@
             texto += `Mensaje: ${log.message}\n`;
             texto += `Contexto: ${log.context}\n`;
             texto += `URL: ${log.url || 'No disponible'}\n`;
+            if (log.sistema) {
+                texto += `Sistema: ${log.sistema.platform} | Móvil: ${log.sistema.isMobile} | Pantalla: ${log.sistema.screenSize}\n`;
+            }
             if (log.stack) texto += `Stack: ${log.stack}\n`;
             texto += '\n';
         });
@@ -288,10 +317,41 @@
         return total;
     }
 
-    // ======== FUNCIÓN DE DESCFRADO (AES-GCM) ========
-    async function descifrar(textoCifrado, password) {
+    // ======== FUNCIONES AUXILIARES PARA DETECCIÓN DE FORMATO ========
+    function esHex(texto) {
+        const limpio = texto.replace(/[\s\r\n\-]/g, '');
+        if (limpio.length === 0) return false;
+        return /^[0-9a-fA-F]+$/.test(limpio) && limpio.length % 2 === 0;
+    }
+
+    function hexToBytes(hex) {
+        const limpio = hex.replace(/[\s\r\n\-]/g, '');
+        const bytes = new Uint8Array(limpio.length / 2);
+        for (let i = 0; i < limpio.length; i += 2) {
+            bytes[i/2] = parseInt(limpio.substr(i, 2), 16);
+        }
+        return bytes;
+    }
+
+    function esBase64(texto) {
+        const limpio = texto.replace(/[\s\r\n]/g, '');
+        if (limpio.length === 0) return false;
+        return /^[A-Za-z0-9+/]*={0,2}$/.test(limpio);
+    }
+
+    function base64ToBytes(base64) {
+        const limpio = base64.replace(/[\s\r\n]/g, '');
+        const binaryString = atob(limpio);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes;
+    }
+
+    // ======== FUNCIONES DE DESCIFRADO ========
+    async function descifrarGCM(datos, password) {
         try {
-            // El texto cifrado se espera como Base64
             const enc = new TextEncoder();
             const dec = new TextDecoder();
             const keyMaterial = await crypto.subtle.importKey(
@@ -308,10 +368,8 @@
                 false,
                 ['decrypt']
             );
-            // Separar IV (12 bytes) y datos cifrados
-            const raw = Uint8Array.from(atob(textoCifrado), c => c.charCodeAt(0));
-            const iv = raw.slice(0, 12);
-            const data = raw.slice(12);
+            const iv = datos.slice(0, 12);
+            const data = datos.slice(12);
             const decrypted = await crypto.subtle.decrypt(
                 { name: 'AES-GCM', iv: iv },
                 key,
@@ -319,51 +377,78 @@
             );
             return JSON.parse(dec.decode(decrypted));
         } catch (e) {
-            console.error('Error al descifrar:', e);
-            throw new Error('Contraseña incorrecta o archivo corrupto.');
+            throw new Error('Error en descifrado GCM: ' + e.message);
         }
     }
 
-    // ======== IMPORTAR CREDENCIALES ========
-    function importarCredenciales() {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.enc,.json,.txt';
-        input.onchange = async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-            try {
-                const texto = await file.text();
-                const password = prompt('Introduce la contraseña para descifrar las credenciales:');
-                if (!password) return;
-                const credenciales = await descifrar(texto.trim(), password);
-                if (credenciales.openrouter && credenciales.tavily) {
-                    setApiKey(credenciales.openrouter);
-                    setTavilyKey(credenciales.tavily);
-                    setCredencialesCargadas(true);
-                    mostrarNotificacionTemporal('✅ Credenciales importadas correctamente.');
-                    // Recargar estado
-                    apiKeyActual = credenciales.openrouter;
-                    tavilyKeyActual = credenciales.tavily;
-                    // Si el chat está abierto, actualizar
-                    if (ventanaAbierta) {
-                        actualizarStats();
-                    }
-                } else {
-                    mostrarNotificacionTemporal('❌ El archivo no contiene las claves esperadas.');
-                }
-            } catch (err) {
-                mostrarNotificacionTemporal('❌ Error al importar: ' + err.message);
-                registrarError('credenciales', err.message, 'Importación de credenciales');
+    async function descifrarCBC(datos, keySize = 16) {
+        const keyStr = '2009201710042023';
+        const ivStr = '1004202320092017';
+        try {
+            const enc = new TextEncoder();
+            const dec = new TextDecoder();
+            let keyBytes;
+            if (keySize === 32) {
+                const padded = keyStr.padEnd(32, ' ');
+                keyBytes = enc.encode(padded.slice(0, 32));
+            } else {
+                keyBytes = enc.encode(keyStr.slice(0, 16));
             }
-        };
-        input.click();
+            const ivBytes = enc.encode(ivStr.slice(0, 16));
+
+            const key = await crypto.subtle.importKey(
+                'raw',
+                keyBytes,
+                { name: 'AES-CBC' },
+                false,
+                ['decrypt']
+            );
+            const decrypted = await crypto.subtle.decrypt(
+                { name: 'AES-CBC', iv: ivBytes },
+                key,
+                datos
+            );
+            return JSON.parse(dec.decode(decrypted));
+        } catch (e) {
+            throw new Error('Error en descifrado CBC (keySize=' + keySize + '): ' + e.message);
+        }
     }
 
-    // ======== FUNCIONES DE RED (CON GM_xmlhttpRequest) ========
+    async function descifrarCBCconIV(datos, ivBytes, keySize = 16) {
+        const keyStr = '2009201710042023';
+        const enc = new TextEncoder();
+        const dec = new TextDecoder();
+
+        let keyBytes;
+        if (keySize === 32) {
+            const padded = keyStr.padEnd(32, ' ');
+            keyBytes = enc.encode(padded.slice(0, 32));
+        } else {
+            keyBytes = enc.encode(keyStr.slice(0, 16));
+        }
+
+        const key = await crypto.subtle.importKey(
+            'raw',
+            keyBytes,
+            { name: 'AES-CBC' },
+            false,
+            ['decrypt']
+        );
+
+        const decrypted = await crypto.subtle.decrypt(
+            { name: 'AES-CBC', iv: ivBytes },
+            key,
+            datos
+        );
+
+        return JSON.parse(dec.decode(decrypted));
+    }
+
+    // ======== FUNCIÓN DE PETICIÓN (COMPATIBLE MULTIPLATAFORMA) ========
     function hacerPeticion(url, opciones) {
         return new Promise((resolve, reject) => {
             if (typeof GM_xmlhttpRequest !== 'undefined') {
+                console.log('🔧 Usando GM_xmlhttpRequest para:', url);
                 GM_xmlhttpRequest({
                     method: opciones.method || 'GET',
                     url: url,
@@ -380,10 +465,19 @@
                             reject(new Error(`Error ${resp.status}: ${resp.responseText}`));
                         }
                     },
-                    onerror: (err) => reject(new Error('Error de red: ' + err.error))
+                    onerror: (err) => {
+                        console.warn('⚠️ GM_xmlhttpRequest falló, usando fetch como fallback:', err);
+                        fetch(url, opciones)
+                            .then(async (r) => {
+                                if (!r.ok) throw new Error(`Error ${r.status}: ${await r.text()}`);
+                                return r.json();
+                            })
+                            .then(resolve)
+                            .catch(reject);
+                    }
                 });
             } else {
-                // Fallback a fetch
+                console.log('🔧 GM_xmlhttpRequest no disponible, usando fetch para:', url);
                 fetch(url, opciones)
                     .then(async (r) => {
                         if (!r.ok) throw new Error(`Error ${r.status}: ${await r.text()}`);
@@ -395,10 +489,240 @@
         });
     }
 
-    // ======== FUNCIÓN DE BÚSQUEDA WEB CON TAVILY ========
+    // ======== IMPORTAR CREDENCIALES ========
+    function importarCredenciales() {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '*/*';
+        input.onchange = async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            try {
+                const texto = await file.text();
+                const arrayBuffer = await file.arrayBuffer();
+                const bytesRaw = new Uint8Array(arrayBuffer);
+
+                let credenciales = null;
+                let cifrado = false;
+                const erroresDetallados = [];
+
+                // 1. JSON plano
+                try {
+                    const json = JSON.parse(texto);
+                    if (json.openrouter && json.tavily) {
+                        credenciales = json;
+                        cifrado = false;
+                        mostrarNotificacionTemporal('📄 Archivo JSON plano importado.');
+                    }
+                } catch (_) { /* no es JSON */ }
+
+                // 2. Hex
+                if (!credenciales && esHex(texto)) {
+                    try {
+                        const bytes = hexToBytes(texto);
+                        const metodosHex = [
+                            { nombre: 'Hex-AES128-IV-fijo', fn: () => descifrarCBC(bytes, 16) },
+                            { nombre: 'Hex-AES128-IV-incluido', fn: () => {
+                                if (bytes.length < 16) throw new Error('Datos demasiado cortos');
+                                const iv = bytes.slice(0, 16);
+                                const data = bytes.slice(16);
+                                return descifrarCBCconIV(data, iv, 16);
+                            }},
+                            { nombre: 'Hex-AES256-IV-fijo', fn: () => descifrarCBC(bytes, 32) },
+                            { nombre: 'Hex-AES256-IV-incluido', fn: () => {
+                                if (bytes.length < 16) throw new Error('Datos demasiado cortos');
+                                const iv = bytes.slice(0, 16);
+                                const data = bytes.slice(16);
+                                return descifrarCBCconIV(data, iv, 32);
+                            }}
+                        ];
+                        for (const metodo of metodosHex) {
+                            try {
+                                const resultado = await metodo.fn();
+                                if (resultado && resultado.openrouter && resultado.tavily) {
+                                    credenciales = resultado;
+                                    cifrado = true;
+                                    mostrarNotificacionTemporal(`🔐 Descifrado con ${metodo.nombre}`);
+                                    console.log(`✅ Método exitoso: ${metodo.nombre}`);
+                                    break;
+                                } else {
+                                    erroresDetallados.push(`${metodo.nombre}: descifró pero no contiene openrouter/tavily`);
+                                }
+                            } catch (err) {
+                                erroresDetallados.push(`${metodo.nombre}: ${err.message}`);
+                                console.warn(`❌ Falló ${metodo.nombre}:`, err.message);
+                            }
+                        }
+                    } catch (err) {
+                        erroresDetallados.push('Hex: ' + err.message);
+                    }
+                }
+
+                // 3. Base64
+                if (!credenciales && esBase64(texto)) {
+                    try {
+                        const bytes = base64ToBytes(texto);
+                        const metodosBase64 = [
+                            { nombre: 'Base64-AES128-IV-fijo', fn: () => descifrarCBC(bytes, 16) },
+                            { nombre: 'Base64-AES128-IV-incluido', fn: () => {
+                                if (bytes.length < 16) throw new Error('Datos demasiado cortos');
+                                const iv = bytes.slice(0, 16);
+                                const data = bytes.slice(16);
+                                return descifrarCBCconIV(data, iv, 16);
+                            }},
+                            { nombre: 'Base64-AES256-IV-fijo', fn: () => descifrarCBC(bytes, 32) },
+                            { nombre: 'Base64-AES256-IV-incluido', fn: () => {
+                                if (bytes.length < 16) throw new Error('Datos demasiado cortos');
+                                const iv = bytes.slice(0, 16);
+                                const data = bytes.slice(16);
+                                return descifrarCBCconIV(data, iv, 32);
+                            }}
+                        ];
+                        for (const metodo of metodosBase64) {
+                            try {
+                                const resultado = await metodo.fn();
+                                if (resultado && resultado.openrouter && resultado.tavily) {
+                                    credenciales = resultado;
+                                    cifrado = true;
+                                    mostrarNotificacionTemporal(`🔐 Descifrado con ${metodo.nombre}`);
+                                    console.log(`✅ Método exitoso: ${metodo.nombre}`);
+                                    break;
+                                } else {
+                                    erroresDetallados.push(`${metodo.nombre}: descifró pero no contiene openrouter/tavily`);
+                                }
+                            } catch (err) {
+                                erroresDetallados.push(`${metodo.nombre}: ${err.message}`);
+                                console.warn(`❌ Falló ${metodo.nombre}:`, err.message);
+                            }
+                        }
+                    } catch (err) {
+                        erroresDetallados.push('Base64: ' + err.message);
+                    }
+                }
+
+                // 4. Raw
+                if (!credenciales) {
+                    const metodosRaw = [
+                        { nombre: 'Raw-AES128-IV-fijo', fn: () => descifrarCBC(bytesRaw, 16) },
+                        { nombre: 'Raw-AES128-IV-incluido', fn: () => {
+                            if (bytesRaw.length < 16) throw new Error('Datos demasiado cortos');
+                            const iv = bytesRaw.slice(0, 16);
+                            const data = bytesRaw.slice(16);
+                            return descifrarCBCconIV(data, iv, 16);
+                        }},
+                        { nombre: 'Raw-AES256-IV-fijo', fn: () => descifrarCBC(bytesRaw, 32) },
+                        { nombre: 'Raw-AES256-IV-incluido', fn: () => {
+                            if (bytesRaw.length < 16) throw new Error('Datos demasiado cortos');
+                            const iv = bytesRaw.slice(0, 16);
+                            const data = bytesRaw.slice(16);
+                            return descifrarCBCconIV(data, iv, 32);
+                        }}
+                    ];
+                    for (const metodo of metodosRaw) {
+                        try {
+                            const resultado = await metodo.fn();
+                            if (resultado && resultado.openrouter && resultado.tavily) {
+                                credenciales = resultado;
+                                cifrado = true;
+                                mostrarNotificacionTemporal(`🔐 Descifrado con ${metodo.nombre}`);
+                                console.log(`✅ Método exitoso: ${metodo.nombre}`);
+                                break;
+                            } else {
+                                erroresDetallados.push(`${metodo.nombre}: descifró pero no contiene openrouter/tavily`);
+                            }
+                        } catch (err) {
+                            erroresDetallados.push(`${metodo.nombre}: ${err.message}`);
+                            console.warn(`❌ Falló ${metodo.nombre}:`, err.message);
+                        }
+                    }
+                }
+
+                // 5. GCM
+                if (!credenciales) {
+                    try {
+                        const password = prompt('🔐 Introduce la contraseña para descifrar (método GCM):');
+                        if (password === null) return;
+                        const resultado = await descifrarGCM(bytesRaw, password);
+                        if (resultado && resultado.openrouter && resultado.tavily) {
+                            credenciales = resultado;
+                            cifrado = true;
+                            mostrarNotificacionTemporal('🔐 Descifrado con GCM.');
+                        } else {
+                            throw new Error('No contiene las claves esperadas');
+                        }
+                    } catch (errGCM) {
+                        erroresDetallados.push('GCM: ' + errGCM.message);
+                        console.error('❌ Falló GCM:', errGCM.message);
+                    }
+                }
+
+                if (!credenciales) {
+                    const resumen = erroresDetallados.length
+                        ? '\n\n📋 Intentos realizados:\n' + erroresDetallados.join('\n')
+                        : '';
+                    throw new Error(
+                        'No se pudo descifrar el archivo con ningún método.' +
+                        resumen +
+                        '\n\n🔧 Posibles soluciones:\n' +
+                        '• Verifica que la clave sea "2009201710042023" y el IV "1004202320092017".\n' +
+                        '• Si usaste "Output: Hex" en CyberChef, el script lo detecta automáticamente.\n' +
+                        '• Si usaste "Output: Base64", también está cubierto.\n' +
+                        '• Si descargaste el archivo en modo raw, el script lo maneja igualmente.\n' +
+                        '• Revisa la consola (F12) para ver el error exacto de cada intento.'
+                    );
+                }
+
+                setApiKey(credenciales.openrouter);
+                setTavilyKey(credenciales.tavily);
+                if (credenciales.modelo) setModelo(credenciales.modelo);
+                if (credenciales.url) setUrlBase(credenciales.url);
+                setCredencialesCargadas(true);
+                setConfigInicial(true);
+                apiKeyActual = credenciales.openrouter;
+                tavilyKeyActual = credenciales.tavily;
+                modeloActual = getModelo();
+                urlBaseActual = getUrlBase();
+
+                mostrarNotificacionTemporal('✅ Credenciales importadas correctamente.');
+
+                const asistente = document.getElementById('nomi-asistente-config');
+                if (asistente) asistente.remove();
+                if (!ventanaAbierta) toggleVentana(true);
+                if (ventanaAbierta) actualizarStats();
+
+            } catch (err) {
+                mostrarNotificacionTemporal('❌ ' + err.message);
+                registrarError('credenciales', err.message, 'Importación de credenciales');
+                console.error('Error completo:', err);
+            }
+        };
+        input.click();
+    }
+
+    // ======== GUARDAR CREDENCIALES MANUALES ========
+    function guardarCredencialesManual(apiKey, tavilyKey, modelo, urlBase) {
+        if (!apiKey || !tavilyKey) {
+            mostrarNotificacionTemporal('❌ Debes ingresar ambas claves (OpenRouter y Tavily).');
+            return false;
+        }
+        setApiKey(apiKey);
+        setTavilyKey(tavilyKey);
+        if (modelo) setModelo(modelo);
+        if (urlBase) setUrlBase(urlBase);
+        setCredencialesCargadas(true);
+        setConfigInicial(true);
+        apiKeyActual = apiKey;
+        tavilyKeyActual = tavilyKey;
+        modeloActual = getModelo();
+        urlBaseActual = getUrlBase();
+        mostrarNotificacionTemporal('✅ Credenciales guardadas correctamente.');
+        return true;
+    }
+
+    // ======== FUNCIONES DE RED ========
     async function buscarWeb(consulta) {
         if (!tavilyKeyActual) {
-            throw new Error('No hay clave de Tavily. Importa tus credenciales.');
+            throw new Error('No hay clave de Tavily.');
         }
         try {
             const datos = await hacerPeticion('https://api.tavily.com/search', {
@@ -418,10 +742,9 @@
         }
     }
 
-    // ======== FUNCIÓN PARA LLAMAR A LA IA ========
     async function llamarIA(mensaje) {
         if (!apiKeyActual) {
-            throw new Error('No hay clave de OpenRouter. Importa tus credenciales.');
+            throw new Error('No hay clave de OpenRouter.');
         }
         try {
             const datos = await hacerPeticion(urlBaseActual + '/chat/completions', {
@@ -520,8 +843,13 @@
 
     // ======== PROCESAR BÚSQUEDA ========
     async function procesarBusqueda(consulta) {
+        if (motorBusqueda === 'ninguno') {
+            agregarMensaje('bot', 'ℹ️ La búsqueda web está desactivada. Puedes activarla en el menú (⚙️) si has importado una clave de Tavily.');
+            return;
+        }
         if (!tavilyKeyActual) {
-            agregarMensaje('bot', '❌ No hay clave de Tavily. Importa tus credenciales.');
+            const mensaje = `ℹ️ No hay clave de Tavily configurada. Para buscar en internet, necesitas una clave de Tavily.\n\nPuedes obtener una gratis en: https://tavily.com\n(Regístrate, copia tu API key y pégala en el menú ⚙️).`;
+            agregarMensaje('bot', mensaje);
             return;
         }
         agregarMensaje('bot', `🔍 Realizando búsqueda: "${consulta}"...`);
@@ -565,7 +893,7 @@
         }
     }
 
-    // ======== OTRAS FUNCIONES (MOSTRAR AYUDA, GPS, ETC.) ========
+    // ======== OTRAS FUNCIONES ========
     function mostrarAyuda() {
         const ayuda = `
 **📋 Comandos disponibles para NoMi**
@@ -573,7 +901,7 @@
 | Comando | Descripción |
 |---------|-------------|
 | \`!cmd\` o \`!comandos\` | Muestra esta lista de ayuda. |
-| \`investiga: [pregunta]\` o \`busca: [pregunta]\` | Realiza una búsqueda en la web (requiere credenciales importadas). |
+| \`investiga: [pregunta]\` o \`busca: [pregunta]\` | Realiza una búsqueda en la web (requiere credenciales). |
 | \`analiza\`, \`examina\` o \`escanea\` | Analiza el contenido de la página actual. |
 | \`presentate\` | Muestra nuevamente el mensaje de bienvenida. |
 | \`actualizar ubicación\` | Fuerza la actualización de la ubicación (si está activada). |
@@ -762,11 +1090,10 @@
     credencialesCargadas = getCredencialesCargadas();
     apiKeyActual = getApiKey();
     tavilyKeyActual = getTavilyKey();
+    configuracionInicialCompletada = getConfigInicial();
+    motorBusqueda = getMotorBusqueda();
 
     limpiarHistorialesAntiguos();
-
-    // ======== MOSTRAR AYUDA ========
-    function mostrarAyuda() { /* ya definida arriba */ }
 
     // ======== INICIO DEL ASISTENTE ========
     function iniciarAsistente() {
@@ -784,6 +1111,8 @@
         credencialesCargadas = getCredencialesCargadas();
         apiKeyActual = getApiKey();
         tavilyKeyActual = getTavilyKey();
+        configuracionInicialCompletada = getConfigInicial();
+        motorBusqueda = getMotorBusqueda();
 
         crearBurbuja();
         crearVentanaChat();
@@ -793,15 +1122,19 @@
             actualizarUbicacion(true);
         }
 
-        // Mensaje de sistema para tono profesional (no se muestra)
+        const mostrarConfig = !configuracionInicialCompletada || !credencialesCargadas;
+
         if (historial.length === 0) {
             const sistema = `Eres NoMi, un asistente profesional y formal pero cercano. Responde con claridad, respeto y precisión. Evita el tuteo excesivo y mantén un tono de colaboración entre iguales. El usuario espera respuestas útiles, concisas y bien estructuradas.\n\n**Si el usuario pregunta sobre su ubicación (ej: "¿dónde estoy?", "¿en qué ciudad estoy?"), usa los datos de ubicación que tienes en el contexto.** No digas que no tienes acceso a la ubicación.`;
             historial.unshift({ role: 'system', content: sistema });
             guardarHistorial(historial);
 
             let bienvenida = `Hola, soy **${NOMBRE_ASISTENTE}**, su asistente de navegación.\nPara ver la lista de comandos disponibles, escriba \`!cmd\`.\n`;
-            if (!credencialesCargadas) {
-                bienvenida += `\n⚠️ **Aún no has importado tus credenciales.** Ve al menú (⚙️) y selecciona "Importar credenciales" para activar la búsqueda web y el acceso a la IA.\n`;
+            
+            if (mostrarConfig) {
+                bienvenida += `\n⚠️ **Es necesario configurar tus credenciales.**\nSe abrirá un asistente de configuración para que importes o ingreses tus claves de API.\n`;
+            } else if (!credencialesCargadas) {
+                bienvenida += `\n⚠️ **Aún no has configurado tus credenciales.** Ve al menú (⚙️) y selecciona "Importar credenciales" o ingresa tus claves manualmente para activar la búsqueda web y el acceso a la IA.\n`;
             } else {
                 bienvenida += `\n✅ Credenciales cargadas correctamente.\n`;
             }
@@ -814,22 +1147,519 @@
         }
         actualizarStats();
         if (!burbujaVisible) toggleBurbuja(true);
+
+        if (mostrarConfig) {
+            setTimeout(() => {
+                if (ventanaAbierta) {
+                    mostrarAsistenteConfiguracion();
+                } else {
+                    toggleVentana(true);
+                    setTimeout(() => mostrarAsistenteConfiguracion(), 300);
+                }
+            }, 800);
+        }
+
         console.log(`✅ ${NOMBRE_ASISTENTE} V${VERSION_SCRIPT} activado!`);
     }
 
-    // ======== CREAR BURBUJA (IDÉNTICA A LA V5.6) ========
+    // ======== ASISTENTE DE CONFIGURACIÓN INICIAL ========
+    function mostrarAsistenteConfiguracion() {
+        const existing = document.getElementById('nomi-asistente-config');
+        if (existing) existing.remove();
+
+        const { w, h } = obtenerTamanoReal();
+        const left = window.innerWidth / 2 - w / 2;
+        const top = window.innerHeight / 2 - h / 2;
+
+        const asistente = document.createElement('div');
+        asistente.id = 'nomi-asistente-config';
+        asistente.style.cssText = `
+            position: fixed;
+            left: ${left}px;
+            top: ${top}px;
+            width: ${w}px;
+            height: ${h}px;
+            max-width: 90vw;
+            max-height: 90vh;
+            background: #1a1a2e;
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.9);
+            z-index: 9999999;
+            font-family: sans-serif;
+            border: 2px solid #FF6B6B;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            color: #fff;
+        `;
+
+        asistente.innerHTML = `
+            <div style="text-align: center; margin-bottom: 16px;">
+                <h1 style="color: #FF6B6B; margin: 0; font-size: 24px;">🤖 ${NOMBRE_ASISTENTE}</h1>
+                <p style="color: #888; font-size: 13px; margin: 4px 0;">Asistente IA para navegación</p>
+                <p style="color: #555; font-size: 11px;">Versión ${VERSION_SCRIPT} | ${FECHA_LANZAMIENTO}</p>
+            </div>
+
+            <div style="flex: 1; overflow-y: auto; padding: 8px 0;">
+                <div style="background: #0d0d1a; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+                    <h3 style="color: #4a6cf7; margin: 0 0 12px 0; font-size: 15px;">🔑 Configuración de credenciales</h3>
+                    <p style="color: #888; font-size: 12px; margin-bottom: 16px;">
+                        Para usar ${NOMBRE_ASISTENTE}, necesitas configurar tus claves de API.
+                        Puedes importarlas desde un archivo <b>.enc</b> (si tienes uno) o ingresarlas manualmente.
+                    </p>
+
+                    <button id="nomi-config-importar" style="width: 100%; padding: 12px; background: #4a6cf7; border: none; border-radius: 10px; color: #fff; font-size: 14px; cursor: pointer; margin-bottom: 12px;">
+                        📥 Importar desde archivo .enc
+                    </button>
+
+                    <div style="border-top: 1px solid #333; padding-top: 12px; margin-top: 8px;">
+                        <p style="color: #888; font-size: 12px; margin-bottom: 8px;">✏️ O ingresa tus claves manualmente:</p>
+                        <div style="margin-bottom: 8px;">
+                            <label style="font-size: 11px; color: #888; display: block; margin-bottom: 2px;">OpenRouter API Key *</label>
+                            <input type="password" id="nomi-config-openrouter" placeholder="sk-or-v1-..." 
+                                   style="width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #555; background: #0d0d1a; color: #fff; font-size: 12px;">
+                        </div>
+                        <div style="margin-bottom: 8px;">
+                            <label style="font-size: 11px; color: #888; display: block; margin-bottom: 2px;">Tavily API Key *</label>
+                            <input type="password" id="nomi-config-tavily" placeholder="tvly-..." 
+                                   style="width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #555; background: #0d0d1a; color: #fff; font-size: 12px;">
+                        </div>
+                        <div style="margin-bottom: 8px;">
+                            <label style="font-size: 11px; color: #888; display: block; margin-bottom: 2px;">Modelo (opcional)</label>
+                            <input type="text" id="nomi-config-modelo" placeholder="${MODELO_POR_DEFECTO}" 
+                                   style="width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #555; background: #0d0d1a; color: #fff; font-size: 12px;">
+                        </div>
+                        <div style="margin-bottom: 8px;">
+                            <label style="font-size: 11px; color: #888; display: block; margin-bottom: 2px;">URL Base (opcional)</label>
+                            <input type="text" id="nomi-config-url" placeholder="${URL_BASE_POR_DEFECTO}" 
+                                   style="width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #555; background: #0d0d1a; color: #fff; font-size: 12px;">
+                        </div>
+                        <button id="nomi-config-guardar" style="width: 100%; padding: 10px; background: #34a853; border: none; border-radius: 8px; color: #fff; font-size: 13px; cursor: pointer;">
+                            💾 Guardar credenciales
+                        </button>
+                    </div>
+                </div>
+
+                <div style="background: #0d0d1a; border-radius: 12px; padding: 12px; border: 1px solid #333;">
+                    <p style="color: #555; font-size: 10px; margin: 0; text-align: center;">
+                        ℹ️ Las claves se guardan localmente en tu navegador.<br>
+                        Puedes cambiarlas en cualquier momento desde el menú (⚙️).
+                    </p>
+                </div>
+            </div>
+
+            <div style="margin-top: 12px; display: flex; gap: 8px; flex-shrink: 0;">
+                <button id="nomi-config-cerrar" style="flex: 1; padding: 8px; background: #333; border: none; border-radius: 8px; color: #888; font-size: 12px; cursor: pointer;">
+                    Cerrar (configurar más tarde)
+                </button>
+            </div>
+        `;
+
+        document.body.appendChild(asistente);
+
+        document.getElementById('nomi-config-importar').onclick = () => {
+            importarCredenciales();
+        };
+
+        document.getElementById('nomi-config-guardar').onclick = () => {
+            const apiKey = document.getElementById('nomi-config-openrouter').value.trim();
+            const tavilyKey = document.getElementById('nomi-config-tavily').value.trim();
+            const modelo = document.getElementById('nomi-config-modelo').value.trim() || MODELO_POR_DEFECTO;
+            const urlBase = document.getElementById('nomi-config-url').value.trim() || URL_BASE_POR_DEFECTO;
+
+            if (guardarCredencialesManual(apiKey, tavilyKey, modelo, urlBase)) {
+                const asistente = document.getElementById('nomi-asistente-config');
+                if (asistente) asistente.remove();
+                if (!ventanaAbierta) toggleVentana(true);
+                if (historial.length > 0) {
+                    const ultimoMensaje = historial[historial.length - 1];
+                    if (ultimoMensaje.role === 'assistant' && ultimoMensaje.content.includes('Aún no has importado')) {
+                        historial.pop();
+                        const nuevoMensaje = `✅ Credenciales configuradas correctamente.\n\n¿En qué puedo ayudarle?`;
+                        historial.push({role: 'assistant', content: nuevoMensaje});
+                        guardarHistorial(historial);
+                        cargarHistorial();
+                    }
+                }
+                actualizarStats();
+            }
+        };
+
+        document.getElementById('nomi-config-cerrar').onclick = () => {
+            if (confirm('⚠️ Sin credenciales, NoMi no podrá responder preguntas ni buscar en la web.\n¿Estás seguro de que quieres continuar sin configurar?')) {
+                const asistente = document.getElementById('nomi-asistente-config');
+                if (asistente) asistente.remove();
+                if (!ventanaAbierta) toggleVentana(true);
+                if (historial.length > 0) {
+                    const ultimoMensaje = historial[historial.length - 1];
+                    if (!(ultimoMensaje.role === 'assistant' && ultimoMensaje.content.includes('Aún no has importado'))) {
+                        const advertencia = `⚠️ **Aún no has configurado tus credenciales.**\n\nVe al menú (⚙️) y selecciona "Importar credenciales" o ingresa tus claves manualmente para activar la búsqueda web y el acceso a la IA.\n\nMientras tanto, puedo ayudarte con comandos básicos como \`!cmd\` para ver la lista de comandos.`;
+                        agregarMensaje('bot', advertencia);
+                    }
+                }
+            }
+        };
+    }
+
+    // ======== CREAR BURBUJA ========
     function crearBurbuja() {
-        // ... (código idéntico al de V5.6, omitido por brevedad pero incluido en el script final)
-        // Lo mantengo igual para no alargar, pero en el script completo estará.
+        const existing = document.getElementById('nomi-bubble');
+        if (existing) existing.remove();
+
+        const bubble = document.createElement('div');
+        bubble.id = 'nomi-bubble';
+        bubble.textContent = '💬';
+        bubble.style.cssText = `
+            position: fixed;
+            left: 20px;
+            bottom: 20px;
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background: #1a1a2e;
+            border: 2px solid #FF6B6B;
+            color: white;
+            font-size: 28px;
+            cursor: pointer;
+            z-index: 999998;
+            box-shadow: 0 4px 16px rgba(255,107,107,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+            touch-action: none;
+            transition: transform 0.2s;
+        `;
+
+        if (posicionBurbuja.x || posicionBurbuja.y) {
+            bubble.style.left = posicionBurbuja.x + 'px';
+            bubble.style.top = posicionBurbuja.y + 'px';
+            bubble.style.right = 'auto';
+            bubble.style.bottom = 'auto';
+        }
+
+        document.body.appendChild(bubble);
+        burbujaVisible = true;
+
+        let startX, startY, origX, origY, isDragging = false, isTouching = false;
+
+        bubble.addEventListener('touchstart', (e) => {
+            if (ventanaAbierta) return;
+            const touch = e.touches[0];
+            startX = touch.clientX;
+            startY = touch.clientY;
+            origX = bubble.offsetLeft || 0;
+            origY = bubble.offsetTop || 0;
+            isDragging = false;
+            isTouching = true;
+            bubble.style.cursor = 'grabbing';
+        }, { passive: true });
+
+        bubble.addEventListener('touchmove', (e) => {
+            if (!isTouching || ventanaAbierta) return;
+            const touch = e.touches[0];
+            const dx = touch.clientX - startX;
+            const dy = touch.clientY - startY;
+            if (Math.sqrt(dx*dx + dy*dy) > 10) {
+                isDragging = true;
+                let newX = origX + dx;
+                let newY = origY + dy;
+                newX = Math.max(0, Math.min(window.innerWidth - 56, newX));
+                newY = Math.max(0, Math.min(window.innerHeight - 56, newY));
+                bubble.style.left = newX + 'px';
+                bubble.style.top = newY + 'px';
+                bubble.style.right = 'auto';
+                bubble.style.bottom = 'auto';
+                posicionBurbuja = { x: newX, y: newY };
+                setPosicion(posicionBurbuja);
+            }
+        }, { passive: true });
+
+        bubble.addEventListener('touchend', () => {
+            isTouching = false;
+            bubble.style.cursor = 'pointer';
+            if (!isDragging) {
+                toggleVentana();
+            }
+            isDragging = false;
+        }, { passive: true });
+
+        let mouseDown = false, mouseStartX, mouseStartY, mouseOrigX, mouseOrigY, mouseDragging = false;
+        bubble.addEventListener('mousedown', (e) => {
+            if (ventanaAbierta) return;
+            mouseDown = true;
+            mouseStartX = e.clientX;
+            mouseStartY = e.clientY;
+            mouseOrigX = bubble.offsetLeft || 0;
+            mouseOrigY = bubble.offsetTop || 0;
+            mouseDragging = false;
+            bubble.style.cursor = 'grabbing';
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!mouseDown || ventanaAbierta) return;
+            const dx = e.clientX - mouseStartX;
+            const dy = e.clientY - mouseStartY;
+            if (Math.sqrt(dx*dx + dy*dy) > 5) {
+                mouseDragging = true;
+                let newX = mouseOrigX + dx;
+                let newY = mouseOrigY + dy;
+                newX = Math.max(0, Math.min(window.innerWidth - 56, newX));
+                newY = Math.max(0, Math.min(window.innerHeight - 56, newY));
+                bubble.style.left = newX + 'px';
+                bubble.style.top = newY + 'px';
+                bubble.style.right = 'auto';
+                bubble.style.bottom = 'auto';
+                posicionBurbuja = { x: newX, y: newY };
+                setPosicion(posicionBurbuja);
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (mouseDown) {
+                mouseDown = false;
+                bubble.style.cursor = 'pointer';
+                if (!mouseDragging) {
+                    toggleVentana();
+                }
+                mouseDragging = false;
+            }
+        });
     }
 
     // ======== VENTANA DE CHAT ========
     function crearVentanaChat() {
-        // ... (código idéntico al de V5.6, con los botones y eventos)
+        const existing = document.getElementById('nomi-chat');
+        if (existing) existing.remove();
+
+        const win = document.createElement('div');
+        win.id = 'nomi-chat';
+        const { w, h } = obtenerTamanoReal();
+        let left = window.innerWidth - w - 20;
+        let top = window.innerHeight - h - 90;
+        if (posicionVentana.x && posicionVentana.y) {
+            left = posicionVentana.x;
+            top = posicionVentana.y;
+        }
+        left = Math.max(0, Math.min(window.innerWidth - w, left));
+        top = Math.max(0, Math.min(window.innerHeight - h, top));
+
+        win.style.cssText = `
+            position: fixed;
+            left: ${left}px;
+            top: ${top}px;
+            width: ${w}px;
+            height: ${h}px;
+            max-width: 90vw;
+            max-height: 90vh;
+            background: #1a1a2e;
+            border-radius: 20px;
+            padding: 12px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.9);
+            z-index: 999997;
+            font-family: sans-serif;
+            border: 1px solid #4a4a6a;
+            display: none;
+            flex-direction: column;
+            overflow: hidden;
+            transition: none;
+        `;
+        posicionVentana = { x: left, y: top };
+        setPosicionVentana(posicionVentana);
+
+        win.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; color:#fff; flex-shrink:0;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <b style="font-size:13px; color:#FF6B6B;">${NOMBRE_ASISTENTE}</b>
+                    <span id="nomi-modelo-display" style="font-size:9px; color:#888;">${modeloActual}</span>
+                </div>
+                <div>
+                    <button id="nomi-web-btn" style="background:none; border:1px solid #555; border-radius:6px; padding:2px 8px; color:#888; font-size:12px; cursor:pointer; margin-right:4px;">🌐</button>
+                    <button id="nomi-stats-btn" style="background:none; border:none; color:#888; font-size:14px; cursor:pointer; margin-right:4px;" title="Estadísticas">📊</button>
+                    <button id="nomi-export-btn" style="background:none; border:none; color:#888; font-size:14px; cursor:pointer; margin-right:4px;" title="Exportar historial">📤</button>
+                    <button id="nomi-menu-btn" style="background:none; border:1px solid #555; border-radius:6px; padding:2px 8px; color:#888; font-size:12px; cursor:pointer; margin-right:4px;">⚙️</button>
+                </div>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:9px; color:#555; flex-shrink:0; margin-bottom:4px;">
+                <span id="nomi-contexto-indicador">📚 Contexto: ${contextoSeleccionado} mensajes</span>
+                <span id="nomi-web-status" style="display:none; color:#34a853;">🌐 Web activo</span>
+            </div>
+            <div id="nomi-chat-body" style="flex:1; background:#0d0d1a; border-radius:12px; padding:8px; overflow-y:auto; margin-bottom:8px; font-size:12px; color:#ccc; min-height:100px;">
+                <div style="color:#666; text-align:center;">Cargando conversación...</div>
+            </div>
+            <div id="nomi-loading" style="display:none; color:#888; font-size:11px; font-style:italic; margin-bottom:4px; flex-shrink:0;">✍️ Escribiendo<span id="nomi-dots">.</span></div>
+            <div style="display:flex; gap:6px; flex-shrink:0;">
+                <input id="nomi-input" type="text" placeholder="Pregunta..." style="flex:1; padding:8px; border-radius:10px; border:none; background:#0d0d1a; color:#fff; font-size:13px;" autocomplete="off">
+                <button id="nomi-search-btn" style="background:#4a6cf7; border:none; border-radius:10px; padding:8px 12px; color:#fff; font-size:14px; cursor:pointer; margin-right:4px;" title="Forzar búsqueda web de esta pregunta">🔍</button>
+                <button id="nomi-enviar" style="background:#FF6B6B; border:none; border-radius:10px; padding:8px 14px; color:#fff; font-weight:bold; cursor:pointer;">➤</button>
+            </div>
+            <div style="margin-top:6px; display:flex; justify-content:space-between; align-items:center; font-size:9px; color:#555; flex-shrink:0;">
+                <div>
+                    <button id="nomi-lock-toggle" style="background:none; border:none; color:#888; font-size:14px; cursor:pointer; padding:0; z-index:999999;" title="Bloquear/Desbloquear movimiento de la ventana">🔓</button>
+                </div>
+                <div style="display:flex; align-items:center; gap:6px;">
+                    <span id="nomi-ubicacion-display" style="color:#888; font-size:10px;">📍 ${ubicacionActual ? `${ubicacionActual.ciudad}, ${ubicacionActual.pais}` : 'Ubicación desactivada'}</span>
+                    <button id="nomi-ubicacion-update" style="background:none; border:none; color:#4a6cf7; font-size:12px; cursor:pointer; padding:0 4px;" title="Actualizar ubicación">⟳</button>
+                    <span>📊 Tokens: <span id="nomi-token-counter">0</span></span>
+                    <button id="nomi-cerrar-chat" style="background:none; border:none; color:#888; font-size:14px; cursor:pointer; padding:0 6px; margin-left:4px;" title="Cerrar chat">✕</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(win);
+
+        document.getElementById('nomi-ubicacion-update').onclick = () => {
+            if (ubicacionActivada) {
+                actualizarUbicacion(false);
+            } else {
+                mostrarNotificacionTemporal('📍 La ubicación está desactivada. Actívala en el menú (⚙️).');
+            }
+        };
+
+        document.getElementById('nomi-search-btn').onclick = () => {
+            const input = document.getElementById('nomi-input');
+            const texto = input.value.trim();
+            if (texto) {
+                busquedaForzada = true;
+                preguntar(texto);
+            } else {
+                mostrarNotificacionTemporal('Escribe una pregunta antes de usar la lupa.');
+            }
+        };
+
+        const lockToggle = document.getElementById('nomi-lock-toggle');
+        lockToggle.onclick = function(e) {
+            e.stopPropagation();
+            ventanaBloqueada = !ventanaBloqueada;
+            this.textContent = ventanaBloqueada ? '🔒' : '🔓';
+            console.log(ventanaBloqueada ? '🔒 Ventana bloqueada (no se puede mover)' : '🔓 Ventana desbloqueada (se puede mover)');
+        };
+
+        document.getElementById('nomi-cerrar-chat').onclick = () => {
+            toggleVentana(false);
+        };
+
+        let dragStartX, dragStartY, dragOrigLeft, dragOrigTop, isDraggingWin = false;
+
+        win.addEventListener('mousedown', (e) => {
+            if (ventanaBloqueada) return;
+            if (e.target.closest('button') || e.target.closest('input')) return;
+            if (e.clientY - win.getBoundingClientRect().top > 30) return;
+            e.preventDefault();
+            dragStartX = e.clientX;
+            dragStartY = e.clientY;
+            dragOrigLeft = win.offsetLeft;
+            dragOrigTop = win.offsetTop;
+            isDraggingWin = true;
+
+            const onMove = (ev) => {
+                if (!isDraggingWin) return;
+                const dx = ev.clientX - dragStartX;
+                const dy = ev.clientY - dragStartY;
+                let nl = dragOrigLeft + dx;
+                let nt = dragOrigTop + dy;
+                nl = Math.max(0, Math.min(window.innerWidth - win.offsetWidth, nl));
+                nt = Math.max(0, Math.min(window.innerHeight - win.offsetHeight, nt));
+                win.style.left = nl + 'px';
+                win.style.top = nt + 'px';
+                posicionVentana = { x: nl, y: nt };
+                setPosicionVentana(posicionVentana);
+            };
+            const onUp = () => {
+                isDraggingWin = false;
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+
+        win.addEventListener('touchstart', (e) => {
+            if (ventanaBloqueada) return;
+            if (e.target.closest('button') || e.target.closest('input')) return;
+            const touch = e.touches[0];
+            if (touch.clientY - win.getBoundingClientRect().top > 30) return;
+            e.preventDefault();
+            dragStartX = touch.clientX;
+            dragStartY = touch.clientY;
+            dragOrigLeft = win.offsetLeft;
+            dragOrigTop = win.offsetTop;
+            isDraggingWin = true;
+        }, {passive:false});
+
+        win.addEventListener('touchmove', (e) => {
+            if (ventanaBloqueada) return;
+            if (!isDraggingWin) return;
+            const touch = e.touches[0];
+            const dx = touch.clientX - dragStartX;
+            const dy = touch.clientY - dragStartY;
+            let nl = dragOrigLeft + dx;
+            let nt = dragOrigTop + dy;
+            nl = Math.max(0, Math.min(window.innerWidth - win.offsetWidth, nl));
+            nt = Math.max(0, Math.min(window.innerHeight - win.offsetHeight, nt));
+            win.style.left = nl + 'px';
+            win.style.top = nt + 'px';
+            posicionVentana = { x: nl, y: nt };
+            setPosicionVentana(posicionVentana);
+        }, {passive:false});
+
+        win.addEventListener('touchend', () => {
+            isDraggingWin = false;
+        });
+
+        document.getElementById('nomi-enviar').onclick = () => {
+            const input = document.getElementById('nomi-input');
+            preguntar(input.value);
+        };
+
+        document.getElementById('nomi-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                const input = document.getElementById('nomi-input');
+                preguntar(input.value);
+            }
+        });
+
+        document.getElementById('nomi-web-btn').onclick = () => {
+            modoWebActivo = !modoWebActivo;
+            const status = document.getElementById('nomi-web-status');
+            if (modoWebActivo) {
+                status.style.display = 'inline';
+                document.getElementById('nomi-web-btn').style.borderColor = '#34a853';
+                document.getElementById('nomi-web-btn').style.color = '#34a853';
+                agregarMensaje('bot', '🌐 Modo Web activado. La siguiente pregunta incluirá análisis de página.');
+            } else {
+                status.style.display = 'none';
+                document.getElementById('nomi-web-btn').style.borderColor = '#555';
+                document.getElementById('nomi-web-btn').style.color = '#888';
+                agregarMensaje('bot', '🌐 Modo web desactivado.');
+            }
+        };
+
+        document.getElementById('nomi-stats-btn').onclick = () => {
+            mostrarEstadisticas();
+        };
+
+        document.getElementById('nomi-export-btn').onclick = () => {
+            mostrarExportacion();
+        };
+
+        document.getElementById('nomi-menu-btn').onclick = () => {
+            mostrarMenu();
+        };
+
+        actualizarContextoIndicador();
+        actualizarStats();
+        actualizarBarraUbicacion();
     }
 
     // ======== PREGUNTAR A LA IA ========
     async function preguntar(texto) {
+        if (!credencialesCargadas || !apiKeyActual) {
+            agregarMensaje('bot', '⚠️ **No hay credenciales configuradas.**\n\nPor favor, ve al menú (⚙️) y configura tus claves de API (OpenRouter y Tavily) o importa un archivo `.enc`.\n\nMientras tanto, puedes usar comandos básicos como `!cmd` para ver la lista de comandos disponibles.');
+            return;
+        }
+
         const input = document.getElementById('nomi-input');
         if (input) input.value = '';
 
@@ -850,7 +1680,6 @@
             }
         }
 
-        // ======== DETECTAR COMANDO DE BÚSQUEDA ========
         const cmdBusqueda = texto.match(/^(investiga|busca|investigar|buscar)\s*[:|]?\s*(.+)/i);
         let esBusqueda = false;
         let consulta = '';
@@ -891,7 +1720,6 @@
             return;
         }
 
-        // ======== ANÁLISIS DE PÁGINA (MODO WEB) ========
         const palabrasClave = ['analiza', 'examina', 'escanea', 'resume esta página'];
         const esAnalisis = palabrasClave.some(p => texto.toLowerCase().includes(p));
         const usarWeb = modoWebActivo || esAnalisis;
@@ -917,7 +1745,6 @@
             }
         }
 
-        // ======== CONSTRUIR CONTEXTO ========
         const contextoFechaHora = obtenerContextoTiempo();
         let contextoUbicacion = '';
         if (ubicacionActivada && ubicacionActual && requiereUbicacion(texto)) {
@@ -929,7 +1756,6 @@
 
         const contextoCompleto = contextoUbicacion ? `${contextoFechaHora}\n${contextoUbicacion}` : contextoFechaHora;
 
-        // ======== CONSTRUIR MENSAJES PARA LA IA ========
         let mensajesParaEnviar = [];
         if (modoResumenActivo && contextoSeleccionado === 10 && resumenPersistente) {
             mensajesParaEnviar.push({
@@ -1036,7 +1862,7 @@
             position: fixed; top:50%; left:50%; transform:translate(-50%,-50%);
             background:#1a1a2e; border-radius:20px; padding:24px; z-index:9999999;
             color:#fff; border:1px solid #4a4a6a; box-shadow:0 8px 32px rgba(0,0,0,0.9);
-            min-width:280px; max-width:90vw; max-height:80vh; overflow-y:auto;
+            min-width:320px; max-width:90vw; max-height:80vh; overflow-y:auto;
         `;
         const resumenDisabled = contextoSeleccionado !== 10;
         const { w, h } = tamanoVentana;
@@ -1045,14 +1871,63 @@
         const logs = getValor(STORAGE_ERROR_LOGS, []);
         const credCargadas = getCredencialesCargadas();
 
+        const apiKeyActual = getApiKey();
+        const tavilyKeyActual = getTavilyKey();
+        const modeloActual = getModelo();
+        const urlBaseActual = getUrlBase();
+        const motor = getMotorBusqueda();
+
         menu.innerHTML = `
             <h2 style="color:#FF6B6B; margin-top:0;">⚙️ Configuración</h2>
             <div style="margin:10px 0;">
                 <div style="margin-bottom:8px; font-size:11px; color:#555;">
                     💾 Espacio ocupado: <span style="color:#888;">${espacioFormateado}</span>
                     ${logs.length > 0 ? ` | 📋 Errores: <span style="color:#f55036;">${logs.length}</span>` : ''}
-                    ${credCargadas ? ' | ✅ Credenciales cargadas' : ' | ❌ Credenciales no importadas'}
+                    ${credCargadas ? ' | ✅ Credenciales cargadas' : ' | ❌ Credenciales no configuradas'}
                 </div>
+
+                <!-- Sección de credenciales -->
+                <div style="margin-bottom:16px; padding:12px; background:#0d0d1a; border-radius:12px; border:1px solid #333;">
+                    <h3 style="color:#4a6cf7; margin:0 0 8px 0; font-size:14px;">🔑 Credenciales</h3>
+                    <div style="margin-bottom:8px;">
+                        <label style="font-size:12px; color:#888; display:block; margin-bottom:2px;">OpenRouter API Key</label>
+                        <input type="password" id="nomi-input-openrouter" value="${apiKeyActual}" 
+                               style="width:100%; padding:6px; border-radius:6px; border:1px solid #555; background:#0d0d1a; color:#fff; font-size:12px;">
+                    </div>
+                    <div style="margin-bottom:8px;">
+                        <label style="font-size:12px; color:#888; display:block; margin-bottom:2px;">Tavily API Key</label>
+                        <input type="password" id="nomi-input-tavily" value="${tavilyKeyActual}" 
+                               style="width:100%; padding:6px; border-radius:6px; border:1px solid #555; background:#0d0d1a; color:#fff; font-size:12px;">
+                        <div style="font-size:9px; color:#555; margin-top:2px;">Si no tienes, obtén una gratis en tavily.com</div>
+                    </div>
+                    <div style="margin-bottom:8px;">
+                        <label style="font-size:12px; color:#888; display:block; margin-bottom:2px;">Modelo</label>
+                        <input type="text" id="nomi-input-modelo" value="${modeloActual}" 
+                               style="width:100%; padding:6px; border-radius:6px; border:1px solid #555; background:#0d0d1a; color:#fff; font-size:12px;">
+                    </div>
+                    <div style="margin-bottom:8px;">
+                        <label style="font-size:12px; color:#888; display:block; margin-bottom:2px;">URL Base</label>
+                        <input type="text" id="nomi-input-url" value="${urlBaseActual}" 
+                               style="width:100%; padding:6px; border-radius:6px; border:1px solid #555; background:#0d0d1a; color:#fff; font-size:12px;">
+                    </div>
+                    <div style="display:flex; gap:8px;">
+                        <button id="nomi-guardar-creds" style="flex:1; padding:8px; background:#4a6cf7; border:none; border-radius:8px; color:#fff; font-size:13px; cursor:pointer;">💾 Guardar</button>
+                        <button id="nomi-importar-creds-menu" style="flex:1; padding:8px; background:#34a853; border:none; border-radius:8px; color:#fff; font-size:13px; cursor:pointer;">📥 Importar .enc</button>
+                    </div>
+                    <div style="font-size:10px; color:#555; margin-top:4px;">Las claves se guardan localmente en tu navegador.</div>
+                </div>
+
+                <!-- Motor de búsqueda -->
+                <div style="margin-bottom:12px;">
+                    <label style="font-size:14px; display:block; margin-bottom:4px;">🔍 Motor de búsqueda</label>
+                    <select id="nomi-select-motor" style="width:100%; padding:8px; border-radius:8px; background:#0d0d1a; color:#fff; border:1px solid #555;">
+                        <option value="tavily" ${motor === 'tavily' ? 'selected' : ''}>Tavily (requiere clave)</option>
+                        <option value="ninguno" ${motor === 'ninguno' ? 'selected' : ''}>Ninguno (sin búsqueda web)</option>
+                    </select>
+                    <div style="font-size:11px; color:#888;">Elige el motor de búsqueda para obtener información actualizada.</div>
+                </div>
+
+                <!-- Resto del menú -->
                 <div style="margin-bottom:12px;">
                     <label style="display:flex; justify-content:space-between; align-items:center; font-size:14px;">
                         <span>📍 Ubicación</span>
@@ -1100,11 +1975,10 @@
                 <div style="margin-bottom:12px;">
                     <label style="display:flex; justify-content:space-between; align-items:center; font-size:14px;">
                         <span>🔍 Búsqueda web</span>
-                        <input type="checkbox" id="nomi-check-busqueda" ${busquedaWebActiva ? 'checked' : ''}>
+                        <input type="checkbox" id="nomi-check-busqueda" ${busquedaWebActiva ? 'checked' : ''} ${credCargadas ? '' : 'disabled'}>
                     </label>
-                    <div style="font-size:11px; color:#888;">${credCargadas ? 'Activa la búsqueda web automática (detección de palabras clave).' : 'Primero importa tus credenciales.'}</div>
+                    <div style="font-size:11px; color:#888;">${credCargadas ? 'Activa la búsqueda web automática (detección de palabras clave).' : 'Primero configura tus credenciales.'}</div>
                 </div>
-                <button id="nomi-menu-importar-creds" style="width:100%; padding:10px; background:#4a6cf7; border:none; border-radius:10px; color:#fff; font-size:14px; cursor:pointer; margin-bottom:8px;">📥 Importar credenciales</button>
                 <button id="nomi-menu-restaurar" style="width:100%; padding:10px; background:#555; border:none; border-radius:10px; color:#fff; font-size:14px; cursor:pointer; margin-bottom:8px;">🔄 Restaurar posición</button>
                 <button id="nomi-menu-limpiar" style="width:100%; padding:10px; background:#f55036; border:none; border-radius:10px; color:#fff; font-size:14px; cursor:pointer; margin-bottom:8px;">🗑️ Limpiar datos antiguos</button>
                 <button id="nomi-menu-exportar-logs" style="width:100%; padding:10px; background:#4a6cf7; border:none; border-radius:10px; color:#fff; font-size:14px; cursor:pointer; margin-bottom:8px;">📤 Exportar logs de error</button>
@@ -1124,14 +1998,35 @@
         document.body.appendChild(menu);
 
         // ======== EVENTOS DEL MENÚ ========
+
         document.getElementById('nomi-menu-cerrar').onclick = () => menu.remove();
 
-        document.getElementById('nomi-menu-importar-creds').onclick = () => {
+        document.getElementById('nomi-guardar-creds').onclick = () => {
+            const apiKey = document.getElementById('nomi-input-openrouter').value.trim();
+            const tavilyKey = document.getElementById('nomi-input-tavily').value.trim();
+            const modelo = document.getElementById('nomi-input-modelo').value.trim() || MODELO_POR_DEFECTO;
+            const urlBase = document.getElementById('nomi-input-url').value.trim() || URL_BASE_POR_DEFECTO;
+
+            if (guardarCredencialesManual(apiKey, tavilyKey, modelo, urlBase)) {
+                const modelDisplay = document.getElementById('nomi-modelo-display');
+                if (modelDisplay) modelDisplay.textContent = modeloActual;
+                actualizarStats();
+                menu.remove();
+                mostrarNotificacionTemporal('✅ Credenciales guardadas correctamente.');
+            }
+        };
+
+        document.getElementById('nomi-importar-creds-menu').onclick = () => {
             importarCredenciales();
             menu.remove();
         };
 
-        // Ubicación
+        document.getElementById('nomi-select-motor').onchange = (e) => {
+            motorBusqueda = e.target.value;
+            setMotorBusqueda(motorBusqueda);
+            mostrarNotificacionTemporal(`🔍 Motor de búsqueda: ${motorBusqueda === 'tavily' ? 'Tavily' : 'Desactivado'}`);
+        };
+
         document.getElementById('nomi-check-ubicacion').onchange = (e) => {
             ubicacionActivada = e.target.checked;
             setUbicacionActivada(ubicacionActivada);
@@ -1152,7 +2047,6 @@
             menu.remove();
         };
 
-        // Limpieza manual
         document.getElementById('nomi-menu-limpiar').onclick = () => {
             if (confirm('¿Eliminar todos los historiales de más de 7 días? Esta acción no se puede deshacer.')) {
                 const resultado = limpiarHistorialesAntiguos();
@@ -1161,20 +2055,113 @@
             }
         };
 
-        // Exportar logs
         document.getElementById('nomi-menu-exportar-logs').onclick = () => {
             exportarLogs();
             menu.remove();
         };
 
-        // Eliminar datos globales
         document.getElementById('nomi-menu-eliminar-global').onclick = () => {
-            // ... (código similar al de V5.6)
-            // Por brevedad, lo mantengo igual, pero en el script final estará completo.
+            const dialog = document.createElement('div');
+            dialog.id = 'nomi-dialog-global';
+            dialog.style.cssText = `
+                position: fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+                background:#1a1a2e; border-radius:20px; padding:24px; z-index:99999999;
+                color:#fff; border:1px solid #4a4a6a; box-shadow:0 8px 32px rgba(0,0,0,0.9);
+                min-width:280px; max-width:90vw; max-height:80vh; overflow-y:auto;
+            `;
+            dialog.innerHTML = `
+                <h3 style="color:#FF6B6B; margin-top:0;">🗑️ Eliminar datos globales</h3>
+                <p style="font-size:13px; color:#888;">Seleccione qué datos desea eliminar:</p>
+                <div style="margin:12px 0;">
+                    <label style="display:block; margin:6px 0; font-size:13px;">
+                        <input type="checkbox" id="nomi-del-historiales" checked> 📁 Historiales de chat (todos los dominios)
+                    </label>
+                    <label style="display:block; margin:6px 0; font-size:13px;">
+                        <input type="checkbox" id="nomi-del-config" checked> ⚙️ Configuración (contexto, modos)
+                    </label>
+                    <label style="display:block; margin:6px 0; font-size:13px;">
+                        <input type="checkbox" id="nomi-del-ubicacion" checked> 📍 Ubicación guardada
+                    </label>
+                    <label style="display:block; margin:6px 0; font-size:13px;">
+                        <input type="checkbox" id="nomi-del-logs" checked> 📋 Logs de errores
+                    </label>
+                    <label style="display:block; margin:6px 0; font-size:13px;">
+                        <input type="checkbox" id="nomi-del-posicion" checked> 📐 Tamaño y posición de ventana
+                    </label>
+                    <label style="display:block; margin:6px 0; font-size:13px;">
+                        <input type="checkbox" id="nomi-del-tokens" checked> 📊 Estadísticas de tokens
+                    </label>
+                </div>
+                <div style="display:flex; gap:8px; margin-top:16px;">
+                    <button id="nomi-dialog-confirmar" style="flex:1; padding:10px; background:#f55036; border:none; border-radius:10px; color:#fff; font-size:14px; cursor:pointer;">Eliminar seleccionados</button>
+                    <button id="nomi-dialog-cancelar" style="flex:1; padding:10px; background:#333; border:none; border-radius:10px; color:#fff; font-size:14px; cursor:pointer;">Cancelar</button>
+                </div>
+            `;
+            document.body.appendChild(dialog);
+
+            document.getElementById('nomi-dialog-cancelar').onclick = () => dialog.remove();
+            document.getElementById('nomi-dialog-confirmar').onclick = () => {
+                const eliminarHistoriales = document.getElementById('nomi-del-historiales').checked;
+                const eliminarConfig = document.getElementById('nomi-del-config').checked;
+                const eliminarUbicacion = document.getElementById('nomi-del-ubicacion').checked;
+                const eliminarLogs = document.getElementById('nomi-del-logs').checked;
+                const eliminarPosicion = document.getElementById('nomi-del-posicion').checked;
+                const eliminarTokens = document.getElementById('nomi-del-tokens').checked;
+
+                const keysToRemove = [];
+                const keys = Object.keys(localStorage);
+                keys.forEach(key => {
+                    if (key.startsWith('nomi_')) {
+                        if (eliminarHistoriales && key.startsWith('nomi_historial_')) {
+                            keysToRemove.push(key);
+                        } else if (eliminarConfig && (
+                            key === STORAGE_CONTEXTO ||
+                            key === STORAGE_MODO_LIGERO ||
+                            key === STORAGE_MODO_RESUMEN ||
+                            key === STORAGE_BUSQUEDA_WEB ||
+                            key === STORAGE_TAMANO_VENTANA ||
+                            key === STORAGE_VALIDADO ||
+                            key === STORAGE_API_KEY ||
+                            key === STORAGE_MODELO ||
+                            key === STORAGE_URL
+                        )) {
+                            keysToRemove.push(key);
+                        } else if (eliminarUbicacion && (key === STORAGE_UBICACION || key === STORAGE_UBICACION_ACTIVADA)) {
+                            keysToRemove.push(key);
+                        } else if (eliminarLogs && key === STORAGE_ERROR_LOGS) {
+                            keysToRemove.push(key);
+                        } else if (eliminarPosicion && (key === STORAGE_POSICION || key === STORAGE_POSICION_VENTANA)) {
+                            keysToRemove.push(key);
+                        } else if (eliminarTokens && (key === STORAGE_TOKENS || key === STORAGE_CONTADOR || key === STORAGE_RESUMEN)) {
+                            keysToRemove.push(key);
+                        }
+                        if (eliminarHistoriales && key.startsWith('nomi_chats_list_')) {
+                            keysToRemove.push(key);
+                        }
+                    }
+                });
+
+                if (keysToRemove.length === 0) {
+                    mostrarNotificacionTemporal('No hay datos seleccionados para eliminar.');
+                    dialog.remove();
+                    return;
+                }
+
+                if (confirm(`¿Eliminar ${keysToRemove.length} elemento(s)? Esta acción no se puede deshacer.`)) {
+                    keysToRemove.forEach(key => {
+                        localStorage.removeItem(key);
+                        eliminarValor(key);
+                    });
+                    mostrarNotificacionTemporal(`✅ ${keysToRemove.length} elemento(s) eliminado(s). La página se recargará.`);
+                    dialog.remove();
+                    setTimeout(() => location.reload(), 1500);
+                }
+            };
+            menu.remove();
         };
 
         document.getElementById('nomi-menu-cerrar-sesion').onclick = () => {
-            if (confirm('¿Cerrar sesión? Se borrarán los datos de validación.')) {
+            if (confirm('¿Cerrar sesión? Se borrarán los datos de validación y credenciales.')) {
                 setValidado(false);
                 eliminarValor(STORAGE_API_KEY);
                 eliminarValor(STORAGE_TAVILY_KEY);
@@ -1194,6 +2181,8 @@
                 eliminarValor(STORAGE_UBICACION_ACTIVADA);
                 eliminarValor(STORAGE_ERROR_LOGS);
                 eliminarValor(STORAGE_CREDENCIALES_CARGADAS);
+                eliminarValor(STORAGE_CONFIG_INICIAL);
+                eliminarValor(STORAGE_MOTOR_BUSQUEDA);
                 const keys = Object.keys(localStorage).filter(k => k.startsWith('nomi_historial_'));
                 keys.forEach(k => localStorage.removeItem(k));
                 location.reload();
@@ -1217,7 +2206,6 @@
             mostrarNotificacionTemporal('✅ Posición restaurada.');
         };
 
-        // Tamaño de ventana
         document.getElementById('nomi-size-apply').onclick = () => {
             const w = parseInt(document.getElementById('nomi-width-input').value);
             const h = parseInt(document.getElementById('nomi-height-input').value);
@@ -1259,7 +2247,6 @@
             mostrarNotificacionTemporal(`✅ Tamaño predeterminado restaurado.`);
         };
 
-        // Contexto
         document.querySelectorAll('input[name="contexto"]').forEach(el => {
             el.onchange = () => {
                 contextoSeleccionado = parseInt(el.value);
@@ -1279,7 +2266,6 @@
             };
         });
 
-        // Modo Ligero
         document.getElementById('nomi-check-ligero').onchange = (e) => {
             modoLigeroActivo = e.target.checked;
             setModoLigero(modoLigeroActivo);
@@ -1287,7 +2273,6 @@
             mostrarNotificacionTemporal(`✅ Modo ligero ${modoLigeroActivo ? 'activado' : 'desactivado'}.`);
         };
 
-        // Resumen persistente
         document.getElementById('nomi-check-resumen').onchange = (e) => {
             if (contextoSeleccionado !== 10) {
                 e.target.checked = false;
@@ -1303,11 +2288,10 @@
             mostrarNotificacionTemporal(`🧠 Resumen persistente ${modoResumenActivo ? 'activado' : 'desactivado'}.`);
         };
 
-        // Búsqueda web
         document.getElementById('nomi-check-busqueda').onchange = (e) => {
             if (!credencialesCargadas) {
                 e.target.checked = false;
-                mostrarNotificacionTemporal('Primero importa tus credenciales.');
+                mostrarNotificacionTemporal('Primero configura tus credenciales en la sección "Credenciales".');
                 return;
             }
             busquedaWebActiva = e.target.checked;
@@ -1317,10 +2301,7 @@
         };
     }
 
-    // ======== EL RESTO DE FUNCIONES (ESTADÍSTICAS, EXPORTACIÓN, ETC.) ========
-    // Son idénticas a las de V5.6, pero usando las nuevas funciones de persistencia.
-    // Incluyo las funciones necesarias para completar el script.
-
+    // ======== ESTADÍSTICAS ========
     function mostrarEstadisticas() {
         const existing = document.getElementById('nomi-stats-panel');
         if (existing) {
@@ -1356,7 +2337,7 @@
                 Reinicio en: ${diasRestantes} días<br>
                 💾 Espacio: ${espacioFormateado}<br>
                 ${logs.length > 0 ? `📋 Errores registrados: ${logs.length}` : ''}
-                ${credencialesCargadas ? ' | ✅ Credenciales cargadas' : ' | ❌ Credenciales no importadas'}
+                ${credencialesCargadas ? ' | ✅ Credenciales cargadas' : ' | ❌ Credenciales no configuradas'}
             </div>
             <div style="margin-top:8px; font-size:11px; color:#888; border-top:1px solid #333; padding-top:8px; max-height:80px; overflow-y:auto;">
                 🧠 Resumen: ${resumenPreview}
@@ -1367,6 +2348,7 @@
         document.getElementById('nomi-stats-close').onclick = () => div.remove();
     }
 
+    // ======== EXPORTACIÓN ========
     function mostrarExportacion() {
         const existing = document.getElementById('nomi-export-panel');
         if (existing) {
@@ -1437,6 +2419,7 @@
         URL.revokeObjectURL(url);
     }
 
+    // ======== FUNCIONES DE NOTIFICACIÓN Y TOGGLE ========
     function mostrarNotificacionTemporal(msg) {
         const div = document.createElement('div');
         div.style.cssText = `
@@ -1470,6 +2453,7 @@
         }
     }
 
+    // ======== FUNCIONES DEL CHAT ========
     function agregarMensaje(quien, texto) {
         const chatBody = document.getElementById('nomi-chat-body');
         if (!chatBody) return;
@@ -1549,6 +2533,7 @@
             }
         }
     }
+
     function ocultarCargando() {
         const loading = document.getElementById('nomi-loading');
         if (loading) {
