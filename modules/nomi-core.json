@@ -1,0 +1,278 @@
+// ======== MÓDULO: Núcleo Lógico (Orquestación) ========
+// NoMi Assistant – Funciones principales de orquestación
+
+async function procesarBusqueda(consulta) {
+    if (NoMiState.motorBusqueda === 'ninguno') {
+        agregarMensaje('bot', 'ℹ️ La búsqueda web está desactivada. Puedes activarla en el menú (⚙️) si has importado una clave de Tavily.');
+        return;
+    }
+    if (!NoMiState.tavilyKeyActual) {
+        const mensaje = `ℹ️ No hay clave de Tavily configurada. Para buscar en internet, necesitas una clave de Tavily.\n\nPuedes obtener una gratis en: https://tavily.com\n(Regístrate, copia tu API key y pégala en el menú ⚙️).`;
+        agregarMensaje('bot', mensaje);
+        return;
+    }
+    agregarMensaje('bot', `🔍 Realizando búsqueda: "${consulta}"...`);
+    try {
+        let ubicacionTexto = '';
+        let ubicacionCoordenadas = '';
+        if (NoMiState.ubicacionActivada && NoMiState.ubicacionActual) {
+            ubicacionTexto = `${NoMiState.ubicacionActual.ciudad}, ${NoMiState.ubicacionActual.pais}`;
+            ubicacionCoordenadas = `${NoMiState.ubicacionActual.lat}, ${NoMiState.ubicacionActual.lon}`;
+        }
+        let consultaFinal = consulta;
+        if (ubicacionCoordenadas && requiereUbicacion(consulta)) {
+            consultaFinal = `${consulta} en ${ubicacionTexto} (coordenadas: ${ubicacionCoordenadas})`;
+        }
+        const resultados = await buscarWeb(consultaFinal);
+        if (!resultados || !resultados.results || resultados.results.length === 0) {
+            const msg = `❌ No se encontraron resultados para esa consulta.`;
+            NoMiState.historial.push({role: 'assistant', content: msg});
+            guardarHistorial(NoMiState.historial);
+            agregarMensaje('bot', msg);
+            return;
+        }
+        const resultadosTexto = resultados.results.map((r, i) => `${i+1}. ${r.title || 'Sin título'}\n   ${r.content || 'Sin descripción'}`).join('\n\n');
+        const prompt = `El usuario se encuentra en ${ubicacionTexto} (coordenadas GPS: ${ubicacionCoordenadas}). **DEBES usar ESTA ubicación para todas las consultas de clima y eventos locales.** Ignora cualquier otra ubicación que puedas inferir de la IP.\n\nInvestigué en la web sobre: "${consultaFinal}". Estos son los resultados obtenidos:\n\n${resultadosTexto}\n\nPor favor, ofrezca una respuesta clara, concisa y en un tono profesional pero cercano. Evite el uso excesivo de tablas o datos innecesarios. Resume la información más importante en 2-3 párrafos. Si hay datos numéricos (temperatura, precios, etc.), menciónelos de forma fluida dentro de la conversación. Mantenga un tono de colaboración entre iguales, sin tuteo excesivo.`;
+        const respuestaIA = await llamarIA(prompt);
+        const respuestaConIndicador = `🔍 ${respuestaIA}`;
+        NoMiState.historial.push({role: 'assistant', content: respuestaConIndicador});
+        guardarHistorial(NoMiState.historial);
+        agregarMensaje('bot', respuestaConIndicador);
+    } catch (error) {
+        const msg = `❌ Error en la búsqueda: ${error.message}`;
+        NoMiState.historial.push({role: 'assistant', content: msg});
+        guardarHistorial(NoMiState.historial);
+        agregarMensaje('bot', msg);
+    }
+}
+
+function iniciarAsistente() {
+    NoMiState.historial = getHistorial();
+    NoMiState.tokens = getTokens();
+    NoMiState.contadorPreguntas = getContador();
+    NoMiState.resumenPersistente = getResumen();
+    NoMiState.contextoSeleccionado = getContexto();
+    NoMiState.modoLigeroActivo = getModoLigero();
+    NoMiState.modoResumenActivo = getModoResumen();
+    NoMiState.busquedaWebActiva = getBusquedaWeb();
+    NoMiState.tamanoVentana = getTamanoVentana();
+    NoMiState.ubicacionActivada = getUbicacionActivada();
+    NoMiState.ubicacionActual = getUbicacion();
+    NoMiState.credencialesCargadas = getCredencialesCargadas();
+    NoMiState.apiKeyActual = getApiKey();
+    NoMiState.tavilyKeyActual = getTavilyKey();
+    NoMiState.configuracionInicialCompletada = getConfigInicial();
+    NoMiState.motorBusqueda = getMotorBusqueda();
+
+    crearBurbuja();
+    crearVentanaChat();
+    configurarTeclado();
+
+    if (NoMiState.ubicacionActivada && !NoMiState.ubicacionActual) {
+        actualizarUbicacion(true);
+    }
+
+    const mostrarConfig = !NoMiState.configuracionInicialCompletada || !NoMiState.credencialesCargadas;
+
+    if (NoMiState.historial.length === 0) {
+        const sistema = `Eres NoMi, un asistente profesional y formal pero cercano. Responde con claridad, respeto y precisión. Evita el tuteo excesivo y mantén un tono de colaboración entre iguales. El usuario espera respuestas útiles, concisas y bien estructuradas.\n\n**Si el usuario pregunta sobre su ubicación (ej: "¿dónde estoy?", "¿en qué ciudad estoy?"), usa los datos de ubicación que tienes en el contexto.** No digas que no tienes acceso a la ubicación.`;
+        NoMiState.historial.unshift({ role: 'system', content: sistema });
+        guardarHistorial(NoMiState.historial);
+
+        let bienvenida = `Hola, soy **${NOMBRE_ASISTENTE}**, su asistente de navegación.\nPara ver la lista de comandos disponibles, escriba \`!cmd\`.\n`;
+        if (mostrarConfig) bienvenida += `\n⚠️ **Es necesario configurar tus credenciales.**\nSe abrirá un asistente de configuración para que importes o ingreses tus claves de API.\n`;
+        else if (!NoMiState.credencialesCargadas) bienvenida += `\n⚠️ **Aún no has configurado tus credenciales.** Ve al menú (⚙️) y selecciona "Importar credenciales" o ingresa tus claves manualmente para activar la búsqueda web y el acceso a la IA.\n`;
+        else bienvenida += `\n✅ Credenciales cargadas correctamente.\n`;
+        bienvenida += `\n¿En qué puedo ayudarle?`;
+        NoMiState.historial.push({role: 'assistant', content: bienvenida});
+        guardarHistorial(NoMiState.historial);
+        agregarMensaje('bot', bienvenida);
+    } else {
+        cargarHistorial();
+    }
+    actualizarStats();
+    if (!NoMiState.burbujaVisible) toggleBurbuja(true);
+
+    if (mostrarConfig) {
+        setTimeout(() => {
+            if (NoMiState.ventanaAbierta) mostrarAsistenteConfiguracion();
+            else {
+                toggleVentana(true);
+                setTimeout(() => mostrarAsistenteConfiguracion(), 300);
+            }
+        }, 800);
+    }
+    console.log(`✅ ${NOMBRE_ASISTENTE} V${VERSION_SCRIPT} activado!`);
+}
+
+async function preguntar(texto) {
+    if (!NoMiState.credencialesCargadas || !NoMiState.apiKeyActual) {
+        agregarMensaje('bot', '⚠️ **No hay credenciales configuradas.**\n\nPor favor, ve al menú (⚙️) y configura tus claves de API (OpenRouter y Tavily) o importa un archivo `.enc`.\n\nMientras tanto, puedes usar comandos básicos como `!cmd` para ver la lista de comandos disponibles.');
+        return;
+    }
+    const input = document.getElementById('nomi-input');
+    if (input) input.value = '';
+    if (!texto.trim() || NoMiState.isWaiting) return;
+    if (texto.trim() === '!cmd' || texto.trim() === '!comandos') { mostrarAyuda(); return; }
+
+    NoMiState.isWaiting = true;
+    document.getElementById('nomi-modelo-display').textContent = '⏳ pensando...';
+
+    if (NoMiState.ubicacionActivada && NoMiState.ubicacionActual) {
+        if (Date.now() - NoMiState.ubicacionActual.timestamp > UBICACION_EXPIRACION) actualizarUbicacion(true);
+    }
+
+    const cmdBusqueda = texto.match(/^(investiga|busca|investigar|buscar)\s*[:|]?\s*(.+)/i);
+    let esBusqueda = false, consulta = '';
+    if (cmdBusqueda) {
+        consulta = cmdBusqueda[2].trim();
+        if (consulta) {
+            esBusqueda = true;
+            if (!NoMiState.busquedaWebActiva) NoMiState.busquedaWebTemporal = true;
+        }
+    }
+    if (NoMiState.busquedaForzada) {
+        esBusqueda = true; consulta = texto.trim(); NoMiState.busquedaForzada = false;
+        if (!NoMiState.busquedaWebActiva) NoMiState.busquedaWebTemporal = true;
+    }
+    if (!esBusqueda && NoMiState.busquedaWebActiva && requiereBusqueda(texto)) {
+        esBusqueda = true; consulta = texto.trim();
+    }
+    if (esBusqueda && consulta) {
+        ocultarCargando();
+        document.getElementById('nomi-modelo-display').textContent = NoMiState.modeloActual;
+        await procesarBusqueda(consulta);
+        if (NoMiState.busquedaWebTemporal) { NoMiState.busquedaWebTemporal = false; }
+        NoMiState.isWaiting = false;
+        return;
+    }
+
+    const palabrasClave = ['analiza', 'examina', 'escanea', 'resume esta página'];
+    const esAnalisis = palabrasClave.some(p => texto.toLowerCase().includes(p));
+    const usarWeb = NoMiState.modoWebActivo || esAnalisis;
+    let infoPagina = '';
+    if (usarWeb) {
+        const limite = NoMiState.modoLigeroActivo ? LIMITE_TEXTO_LIGERO : LIMITE_TEXTO_NORMAL;
+        const info = extraerInformacionPagina(limite);
+        infoPagina = `INFORMACIÓN DE LA PÁGINA ACTUAL:\nTítulo: ${info.titulo}\nURL: ${info.url}\nDescripción: ${info.metaDesc}\nEncabezados: ${info.encabezados.join(', ')}\nContenido principal (primeros ${limite} caracteres):\n${info.texto}\n---\n`;
+        if (NoMiState.modoWebActivo) {
+            NoMiState.modoWebActivo = false;
+            document.getElementById('nomi-web-status').style.display = 'none';
+            document.getElementById('nomi-web-btn').style.borderColor = '#555';
+            document.getElementById('nomi-web-btn').style.color = '#888';
+        }
+    }
+
+    const contextoFechaHora = obtenerContextoTiempo();
+    let contextoUbicacion = '';
+    if (NoMiState.ubicacionActivada && NoMiState.ubicacionActual && requiereUbicacion(texto)) {
+        const fuente = NoMiState.ubicacionActual.fuente === 'gps' ? 'GPS' : 'IP aproximada';
+        contextoUbicacion = `📍 Ubicación del usuario: ${NoMiState.ubicacionActual.ciudad}, ${NoMiState.ubicacionActual.pais} (${fuente}). Coordenadas GPS: ${NoMiState.ubicacionActual.lat}, ${NoMiState.ubicacionActual.lon}. **DEBES usar ESTA ubicación.**`;
+    } else if (NoMiState.ubicacionActivada && !NoMiState.ubicacionActual && requiereUbicacion(texto)) {
+        contextoUbicacion = '📍 Ubicación: no disponible (solicitando...)';
+    }
+    const contextoCompleto = contextoUbicacion ? `${contextoFechaHora}\n${contextoUbicacion}` : contextoFechaHora;
+
+    let mensajesParaEnviar = [];
+    if (NoMiState.modoResumenActivo && NoMiState.contextoSeleccionado === 10 && NoMiState.resumenPersistente) {
+        mensajesParaEnviar.push({ role: 'system', content: `Resumen de la conversación anterior:\n${NoMiState.resumenPersistente}` });
+    }
+    const limiteMensajes = Math.min(NoMiState.contextoSeleccionado, CONTEXTO_RECIENTE);
+    const mensajesRecientes = NoMiState.historial.filter(m => m.role === 'user' || m.role === 'assistant').slice(-limiteMensajes);
+    mensajesParaEnviar.push(...mensajesRecientes);
+    let mensajeCompleto = texto;
+    if (infoPagina) mensajeCompleto = infoPagina + '\nPregunta del usuario: ' + texto;
+    const mensajeFinal = `${contextoCompleto}\n\nPregunta del usuario: ${mensajeCompleto}`;
+
+    NoMiState.historial.push({role: 'user', content: texto});
+    guardarHistorial(NoMiState.historial);
+    agregarMensaje('yo', texto);
+
+    const enviar = document.getElementById('nomi-enviar');
+    if (input) input.disabled = true;
+    if (enviar) enviar.disabled = true;
+    mostrarCargando();
+
+    try {
+        const respuesta = await hacerPeticion(NoMiState.urlBaseActual + '/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + NoMiState.apiKeyActual,
+                'HTTP-Referer': window.location.href,
+                'X-Title': 'NoMi Asistente'
+            },
+            body: JSON.stringify({
+                model: NoMiState.modeloActual,
+                messages: [...mensajesParaEnviar, {role: 'user', content: mensajeFinal}],
+                stream: false
+            })
+        });
+        ocultarCargando();
+        if (respuesta.choices && respuesta.choices[0]) {
+            const respuestaTexto = respuesta.choices[0].message.content;
+            document.getElementById('nomi-modelo-display').textContent = NoMiState.modeloActual;
+            if (respuesta.usage) {
+                NoMiState.tokens.total += respuesta.usage.total_tokens || 0;
+                NoMiState.tokens.input += respuesta.usage.prompt_tokens || 0;
+                NoMiState.tokens.output += respuesta.usage.completion_tokens || 0;
+                setTokens(NoMiState.tokens);
+            }
+            NoMiState.contadorPreguntas++;
+            setContador(NoMiState.contadorPreguntas);
+            NoMiState.historial.push({role: 'assistant', content: respuestaTexto});
+            guardarHistorial(NoMiState.historial);
+            agregarMensaje('bot', respuestaTexto);
+            actualizarStats();
+            if (NoMiState.modoResumenActivo && NoMiState.contextoSeleccionado === 10) {
+                setTimeout(() => generarResumen(NoMiState.historial), 100);
+            }
+        } else if (respuesta.error) {
+            agregarMensaje('bot', '❌ Error: ' + (respuesta.error.message || JSON.stringify(respuesta.error)));
+            NoMiState.historial.pop();
+            guardarHistorial(NoMiState.historial);
+            document.getElementById('nomi-modelo-display').textContent = '⚠️ error';
+            registrarError('api', respuesta.error.message || 'Error desconocido en API', `Modelo: ${NoMiState.modeloActual}`);
+        } else {
+            agregarMensaje('bot', '❌ Error inesperado');
+            NoMiState.historial.pop();
+            guardarHistorial(NoMiState.historial);
+            document.getElementById('nomi-modelo-display').textContent = '⚠️ error';
+            registrarError('script', 'Respuesta inesperada de la API', 'Sin detalles');
+        }
+    } catch (error) {
+        ocultarCargando();
+        agregarMensaje('bot', '❌ Error de conexión: ' + error.message);
+        NoMiState.historial.pop();
+        guardarHistorial(NoMiState.historial);
+        document.getElementById('nomi-modelo-display').textContent = '⚠️ error';
+        registrarError('network', error.message, `URL: ${NoMiState.urlBaseActual}`);
+    }
+    if (input) input.disabled = false;
+    if (enviar) enviar.disabled = false;
+    if (input) input.focus();
+    NoMiState.isWaiting = false;
+}
+
+async function generarResumen(historialCompleto) {
+    if (!NoMiState.modoResumenActivo || NoMiState.contextoSeleccionado !== 10 || historialCompleto.length < 4) return;
+    try {
+        const respuesta = await hacerPeticion(NoMiState.urlBaseActual + '/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + NoMiState.apiKeyActual },
+            body: JSON.stringify({
+                model: NoMiState.modeloActual,
+                messages: [
+                    { role: 'system', content: 'Eres un asistente que resume conversaciones. Genera un resumen COMPACTO (máximo 300 palabras) de toda la conversación. Incluye temas principales y decisiones. Responde SOLO con el resumen.' },
+                    { role: 'user', content: `Resume esta conversación:\n\n${historialCompleto.map(m => `${m.role === 'user' ? 'Usuario' : 'Asistente'}: ${m.content}`).join('\n')}` }
+                ],
+                stream: false, max_tokens: 500
+            })
+        });
+        if (respuesta.choices && respuesta.choices[0]) {
+            setResumen(respuesta.choices[0].message.content);
+        }
+    } catch (error) {
+        registrarError('api', error.message, 'Generación de resumen');
+    }
+}

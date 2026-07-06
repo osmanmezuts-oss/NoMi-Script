@@ -1,0 +1,38 @@
+// ======== MÓDULO: NoMiState ========
+// NoMi Assistant – Estado centralizado (única fuente de verdad)
+
+window.NoMiState = {
+    modoWebActivo: false,
+    modoResumenActivo: false,
+    modoLigeroActivo: false,
+    busquedaWebActiva: false,
+    busquedaWebTemporal: false,
+    ubicacionActivada: false,
+    contextoSeleccionado: 10,
+    resumenPersistente: '',
+    modeloActual: MODELO_POR_DEFECTO,
+    urlBaseActual: URL_BASE_POR_DEFECTO,
+    burbujaVisible: false,
+    ventanaAbierta: false,
+    validado: false,
+    isWaiting: false,
+    contadorPreguntas: 0,
+    historial: [],
+    tokens: { total: 0, input: 0, output: 0 },
+    posicionBurbuja: { x: 20, y: 20 },
+    posicionVentana: { x: 0, y: 0 },
+    posicionOriginalVentana: null,
+    ventanaBloqueada: false,
+    tamanoVentana: { w: ANCHO_POR_DEFECTO, h: ALTO_POR_DEFECTO },
+    busquedaForzada: false,
+    ubicacionActual: null,
+    fuenteUbicacion: 'desconocida',
+    credencialesCargadas: false,
+    apiKeyActual: '',
+    tavilyKeyActual: '',
+    configuracionInicialCompletada: false,
+    motorBusqueda: 'tavily'
+};
+```
+
+---
