@@ -44,6 +44,4 @@ const STORAGE_ERROR_LOGS = 'nomi_error_logs';
 const STORAGE_CREDENCIALES_CARGADAS = 'nomi_credenciales_cargadas';
 const STORAGE_CONFIG_INICIAL = 'nomi_config_inicial';
 const STORAGE_MOTOR_BUSQUEDA = 'nomi_motor_busqueda';
-```
 
----

@@ -116,6 +116,4 @@ function exportarChat(fecha, formato) {
     a.click();
     URL.revokeObjectURL(url);
 }
-```
 
----

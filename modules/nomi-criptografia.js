@@ -125,6 +125,4 @@ async function descifrarCBCconIV(datos, ivBytes, keySize = 16) {
 
     return JSON.parse(dec.decode(decrypted));
 }
-```
 
----

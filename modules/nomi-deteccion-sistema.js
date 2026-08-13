@@ -15,6 +15,4 @@ function obtenerInfoSistema() {
 
     return { platform, isMobile, userAgent: ua, screenSize };
 }
-```
 
----

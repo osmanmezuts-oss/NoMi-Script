@@ -169,6 +169,4 @@ function guardarCredencialesManual(apiKey, tavilyKey, modelo, urlBase) {
     mostrarNotificacionTemporal('✅ Credenciales guardadas correctamente.');
     return true;
 }
-```
 
----

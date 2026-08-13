@@ -205,6 +205,4 @@ function mostrarMenu() {
         mostrarNotificacionTemporal(`🔍 Búsqueda web ${NoMiState.busquedaWebActiva ? 'activada' : 'desactivada'}.`);
     };
 }
-```
 
----

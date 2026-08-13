@@ -53,6 +53,4 @@ function exportarLogs() {
     a.click();
     URL.revokeObjectURL(url);
 }
-```
 
----

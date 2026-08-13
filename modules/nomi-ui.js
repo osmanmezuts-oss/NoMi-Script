@@ -193,6 +193,4 @@ function crearVentanaChat() {
     actualizarStats();
     actualizarBarraUbicacion();
 }
-```
 
----

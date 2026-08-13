@@ -82,6 +82,4 @@ async function llamarIA(mensaje) {
         throw error;
     }
 }
-```
 
----

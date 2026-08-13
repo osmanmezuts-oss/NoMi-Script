@@ -27,6 +27,4 @@ function requiereUbicacion(texto) {
     const textoLower = texto.toLowerCase();
     return palabrasClave.some(palabra => textoLower.includes(palabra));
 }
-```
 
----

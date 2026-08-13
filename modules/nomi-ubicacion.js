@@ -114,6 +114,4 @@ function actualizarBarraUbicacion() {
         document.getElementById('nomi-ubicacion-update').style.display = 'none';
     }
 }
-```
 
----

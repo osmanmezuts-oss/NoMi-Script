@@ -76,6 +76,4 @@ function configurarTeclado() {
         }
     });
 }
-```
 
----
