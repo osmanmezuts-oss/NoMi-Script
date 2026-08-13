@@ -33,6 +33,3 @@ window.NoMiState = {
     configuracionInicialCompletada: false,
     motorBusqueda: 'tavily'
 };
-```
-
----
