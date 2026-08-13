@@ -63,7 +63,7 @@
     NoMiState.posicionBurbuja = getPosicion();
     const posV = getPosicionVentana();
     if (posV) NoMiState.posicionVentana = posV;
-    NoMiState.posicionOriginalVentana = posV?.y || null;
+    NoMiState.posicionOriginalVentana = posV ? posV.y : null;
     NoMiState.contextoSeleccionado = getContexto();
     NoMiState.modoLigeroActivo = getModoLigero();
     NoMiState.modoResumenActivo = getModoResumen();
