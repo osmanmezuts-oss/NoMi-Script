@@ -3,7 +3,7 @@
 
 const NOMBRE_ASISTENTE = 'NoMi';
 const DISEÑADOR = 'Gartos';
-const MODELO_POR_DEFECTO = 'openai/gpt-oss-120b:free';
+const MODELO_POR_DEFECTO = 'deepseek/deepseek-v4-flash:free';
 const URL_BASE_POR_DEFECTO = 'https://openrouter.ai/api/v1';
 const DIAS_HISTORIAL = 7;
 const LIMITE_TEXTO_NORMAL = 2000;
