@@ -20,7 +20,7 @@ const ALTO_POR_DEFECTO = 400;
 const UBICACION_EXPIRACION = 3 * 60 * 60 * 1000;
 const CONTEXTO_RECIENTE = 10;
 const DIAS_LIMITE_HISTORIAL = 7;
-const VERSION_SCRIPT = '5.8';
+const VERSION_SCRIPT = '5.10';
 const FECHA_LANZAMIENTO = '21/06/2026';
 
 const STORAGE_VALIDADO = 'nomi_validado';
@@ -44,4 +44,5 @@ const STORAGE_ERROR_LOGS = 'nomi_error_logs';
 const STORAGE_CREDENCIALES_CARGADAS = 'nomi_credenciales_cargadas';
 const STORAGE_CONFIG_INICIAL = 'nomi_config_inicial';
 const STORAGE_MOTOR_BUSQUEDA = 'nomi_motor_busqueda';
-
+const STORAGE_SLACK_WEBHOOK = 'nomi_slack_webhook';
+const STORAGE_SLACK_ERRORES_ACTIVO = 'nomi_slack_errores_activo';

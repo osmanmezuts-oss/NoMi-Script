@@ -31,5 +31,7 @@ window.NoMiState = {
     apiKeyActual: '',
     tavilyKeyActual: '',
     configuracionInicialCompletada: false,
-    motorBusqueda: 'tavily'
+    motorBusqueda: 'tavily',
+    slackWebhookUrl: '',
+    slackErroresActivo: false
 };

@@ -18,6 +18,8 @@ function mostrarMenu() {
     const modeloActual = getModelo();
     const urlBaseActual = getUrlBase();
     const motor = getMotorBusqueda();
+    const slackWebhook = getSlackWebhook();
+    const slackErroresActivo = getSlackErroresActivo();
 
     menu.innerHTML = `
         <h2 style="color:#FF6B6B;margin-top:0;">⚙️ Configuración</h2>
@@ -33,6 +35,13 @@ function mostrarMenu() {
                 <div style="font-size:10px;color:#555;margin-top:4px;">Las claves se guardan localmente en tu navegador.</div>
             </div>
             <div style="margin-bottom:12px;"><label style="font-size:14px;display:block;margin-bottom:4px;">🔍 Motor de búsqueda</label><select id="nomi-select-motor" style="width:100%;padding:8px;border-radius:8px;background:#0d0d1a;color:#fff;border:1px solid #555;"><option value="tavily" ${motor === 'tavily' ? 'selected' : ''}>Tavily (requiere clave)</option><option value="ninguno" ${motor === 'ninguno' ? 'selected' : ''}>Ninguno (sin búsqueda web)</option></select><div style="font-size:11px;color:#888;">Elige el motor de búsqueda para obtener información actualizada.</div></div>
+            <div style="margin-bottom:16px;padding:12px;background:#0d0d1a;border-radius:12px;border:1px solid #333;">
+                <h3 style="color:#36c5f0;margin:0 0 8px 0;font-size:14px;">💬 Alertas de Slack</h3>
+                <div style="margin-bottom:8px;"><label style="font-size:12px;color:#888;display:block;margin-bottom:2px;">URL del webhook entrante</label><input type="password" id="nomi-input-slack-webhook" value="${slackWebhook}" placeholder="https://hooks.slack.com/services/..." autocomplete="off" style="width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;"></div>
+                <label style="display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:8px;"><span>Enviar errores automáticamente</span><input type="checkbox" id="nomi-check-slack-errores" ${slackErroresActivo ? 'checked' : ''}></label>
+                <div style="display:flex;gap:8px;"><button id="nomi-guardar-slack" style="flex:1;padding:8px;background:#36c5f0;border:none;border-radius:8px;color:#111;font-size:13px;cursor:pointer;">💾 Guardar Slack</button><button id="nomi-probar-slack" style="flex:1;padding:8px;background:#555;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;">🔌 Probar conexión</button></div>
+                <div style="font-size:10px;color:#888;margin-top:6px;">La URL se guarda solo en Tampermonkey. No la compartas ni la subas a GitHub.</div>
+            </div>
             <div style="margin-bottom:12px;"><label style="display:flex;justify-content:space-between;align-items:center;font-size:14px;"><span>📍 Ubicación</span><input type="checkbox" id="nomi-check-ubicacion" ${NoMiState.ubicacionActivada ? 'checked' : ''}></label><div style="font-size:11px;color:#888;">Permite a NoMi conocer su ubicación para respuestas más precisas (clima, eventos, etc.).</div></div>
             <div style="margin-bottom:12px;"><label style="display:flex;justify-content:space-between;align-items:center;font-size:14px;"><span>🌿 Modo Ligero</span><input type="checkbox" id="nomi-check-ligero" ${NoMiState.modoLigeroActivo ? 'checked' : ''}></label><div style="font-size:11px;color:#888;">Reduce el texto extraído de páginas a 500 caracteres.</div></div>
             <div style="margin-bottom:12px;"><label style="font-size:14px;display:block;margin-bottom:4px;">📌 Contexto</label><div style="display:flex;gap:8px;">${CONTEXTOS_DISPONIBLES.map(c => `<label style="font-size:13px;display:flex;align-items:center;gap:4px;"><input type="radio" name="contexto" value="${c}" ${NoMiState.contextoSeleccionado === c ? 'checked' : ''}>${c}</label>`).join('')}</div><div style="font-size:11px;color:#888;">Número de mensajes enviados al modelo (recomendado: 10).</div></div>
@@ -65,6 +74,27 @@ function mostrarMenu() {
         }
     };
     document.getElementById('nomi-importar-creds-menu').onclick = () => { importarCredenciales(); menu.remove(); };
+    document.getElementById('nomi-guardar-slack').onclick = () => {
+        const webhook = document.getElementById('nomi-input-slack-webhook').value.trim();
+        if (webhook && !/^https:\/\/hooks\.slack(?:-gov)?\.com\/services\//.test(webhook)) {
+            mostrarNotificacionTemporal('❌ La URL no parece ser un webhook válido de Slack.');
+            return;
+        }
+        setSlackWebhook(webhook);
+        setSlackErroresActivo(document.getElementById('nomi-check-slack-errores').checked && Boolean(webhook));
+        menu.remove();
+        mostrarNotificacionTemporal(webhook ? `✅ Slack guardado. Alertas ${NoMiState.slackErroresActivo ? 'activadas' : 'desactivadas'}.` : '✅ Configuración de Slack eliminada.');
+    };
+    document.getElementById('nomi-probar-slack').onclick = async () => {
+        const webhook = document.getElementById('nomi-input-slack-webhook').value.trim();
+        if (webhook) setSlackWebhook(webhook);
+        try {
+            await probarConexionSlack();
+            mostrarNotificacionTemporal('✅ Mensaje de prueba enviado a Slack.');
+        } catch (error) {
+            mostrarNotificacionTemporal(`❌ No se pudo conectar a Slack: ${error.message}`);
+        }
+    };
     document.getElementById('nomi-select-motor').onchange = (e) => {
         NoMiState.motorBusqueda = e.target.value;
         setMotorBusqueda(NoMiState.motorBusqueda);
@@ -107,7 +137,7 @@ function mostrarMenu() {
             Object.keys(localStorage).forEach(key => {
                 if (key.startsWith('nomi_')) {
                     if (checks[0] && key.startsWith('nomi_historial_')) keysToRemove.push(key);
-                    else if (checks[1] && [STORAGE_CONTEXTO, STORAGE_MODO_LIGERO, STORAGE_MODO_RESUMEN, STORAGE_BUSQUEDA_WEB, STORAGE_TAMANO_VENTANA, STORAGE_VALIDADO, STORAGE_API_KEY, STORAGE_MODELO, STORAGE_URL].includes(key)) keysToRemove.push(key);
+                    else if (checks[1] && [STORAGE_CONTEXTO, STORAGE_MODO_LIGERO, STORAGE_MODO_RESUMEN, STORAGE_BUSQUEDA_WEB, STORAGE_TAMANO_VENTANA, STORAGE_VALIDADO, STORAGE_API_KEY, STORAGE_MODELO, STORAGE_URL, STORAGE_SLACK_WEBHOOK, STORAGE_SLACK_ERRORES_ACTIVO].includes(key)) keysToRemove.push(key);
                     else if (checks[2] && (key === STORAGE_UBICACION || key === STORAGE_UBICACION_ACTIVADA)) keysToRemove.push(key);
                     else if (checks[3] && key === STORAGE_ERROR_LOGS) keysToRemove.push(key);
                     else if (checks[4] && (key === STORAGE_POSICION || key === STORAGE_POSICION_VENTANA)) keysToRemove.push(key);
@@ -128,7 +158,7 @@ function mostrarMenu() {
     document.getElementById('nomi-menu-cerrar-sesion').onclick = () => {
         if (confirm('¿Cerrar sesión? Se borrarán los datos de validación y credenciales.')) {
             setValidado(false);
-            ['STORAGE_API_KEY','STORAGE_TAVILY_KEY','STORAGE_MODELO','STORAGE_URL','STORAGE_POSICION','STORAGE_POSICION_VENTANA','STORAGE_RESUMEN','STORAGE_TOKENS','STORAGE_CONTADOR','STORAGE_CONTEXTO','STORAGE_MODO_LIGERO','STORAGE_MODO_RESUMEN','STORAGE_BUSQUEDA_WEB','STORAGE_TAMANO_VENTANA','STORAGE_UBICACION','STORAGE_UBICACION_ACTIVADA','STORAGE_ERROR_LOGS','STORAGE_CREDENCIALES_CARGADAS','STORAGE_CONFIG_INICIAL','STORAGE_MOTOR_BUSQUEDA'].forEach(k => eliminarValor(eval(k)));
+            ['STORAGE_API_KEY','STORAGE_TAVILY_KEY','STORAGE_MODELO','STORAGE_URL','STORAGE_POSICION','STORAGE_POSICION_VENTANA','STORAGE_RESUMEN','STORAGE_TOKENS','STORAGE_CONTADOR','STORAGE_CONTEXTO','STORAGE_MODO_LIGERO','STORAGE_MODO_RESUMEN','STORAGE_BUSQUEDA_WEB','STORAGE_TAMANO_VENTANA','STORAGE_UBICACION','STORAGE_UBICACION_ACTIVADA','STORAGE_ERROR_LOGS','STORAGE_CREDENCIALES_CARGADAS','STORAGE_CONFIG_INICIAL','STORAGE_MOTOR_BUSQUEDA','STORAGE_SLACK_WEBHOOK','STORAGE_SLACK_ERRORES_ACTIVO'].forEach(k => eliminarValor(eval(k)));
             Object.keys(localStorage).filter(k => k.startsWith('nomi_historial_')).forEach(k => localStorage.removeItem(k));
             location.reload();
         }
@@ -205,4 +235,3 @@ function mostrarMenu() {
         mostrarNotificacionTemporal(`🔍 Búsqueda web ${NoMiState.busquedaWebActiva ? 'activada' : 'desactivada'}.`);
     };
 }
-

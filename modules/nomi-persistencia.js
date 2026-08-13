@@ -105,4 +105,7 @@ function getConfigInicial() { return getValor(STORAGE_CONFIG_INICIAL, false); }
 function setConfigInicial(v) { setValor(STORAGE_CONFIG_INICIAL, v); NoMiState.configuracionInicialCompletada = v; }
 function getMotorBusqueda() { return getValor(STORAGE_MOTOR_BUSQUEDA, 'tavily'); }
 function setMotorBusqueda(m) { setValor(STORAGE_MOTOR_BUSQUEDA, m); NoMiState.motorBusqueda = m; }
-
+function getSlackWebhook() { return getValor(STORAGE_SLACK_WEBHOOK, ''); }
+function setSlackWebhook(url) { setValor(STORAGE_SLACK_WEBHOOK, url); NoMiState.slackWebhookUrl = url; }
+function getSlackErroresActivo() { return getValor(STORAGE_SLACK_ERRORES_ACTIVO, false); }
+function setSlackErroresActivo(activo) { setValor(STORAGE_SLACK_ERRORES_ACTIVO, activo); NoMiState.slackErroresActivo = activo; }
