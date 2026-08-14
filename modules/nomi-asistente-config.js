@@ -45,7 +45,7 @@ function mostrarAsistenteConfiguracion() {
                             <button id="nomi-config-refrescar-modelos" style="flex:1;padding:6px;background:#3a4a6a;border:none;border-radius:6px;color:#fff;font-size:11px;cursor:pointer;">Actualizar modelos gratis</button>
                             <span id="nomi-config-estado-modelo" style="font-size:10px;color:#aaa;"></span>
                         </div>
-                        <div style="font-size:10px;color:#888;margin-top:4px;">Lista ordenada por latencia estimada de OpenRouter.</div>
+                        <div style="font-size:10px;color:#888;margin-top:4px;">Lista ordenada por latencia estimada de OpenRouter. Menor número = menor latencia estimada según OpenRouter.</div>
                     </div>
                     <div style="margin-bottom: 8px;"><label style="font-size: 11px; color: #888; display: block; margin-bottom: 2px;">URL Base (opcional)</label><input type="text" id="nomi-config-url" placeholder="${URL_BASE_POR_DEFECTO}" style="width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #555; background: #0d0d1a; color: #fff; font-size: 12px;"></div>
                     <button id="nomi-config-guardar" style="width: 100%; padding: 10px; background: #34a853; border: none; border-radius: 8px; color: #fff; font-size: 13px; cursor: pointer;">💾 Guardar credenciales</button>
@@ -120,6 +120,7 @@ async function cargarModelosAsistente(force) {
             opt.value = m.id;
             let label = `${m.name} | ${m.id}`;
             if (m.context) label += ` | ctx ${m.context}`;
+            if (m.posicion) label += ` | Latencia #${m.posicion}`;
             if (m.id === MODELO_POR_DEFECTO) label += ' — Recomendado';
             if (m.id === actual) opt.selected = true;
             opt.textContent = label;

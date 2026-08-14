@@ -35,7 +35,7 @@ function mostrarMenu() {
                         <button id="nomi-actualizar-modelos" style="flex:1;padding:4px 6px;background:#3a4a6a;border:none;border-radius:6px;color:#fff;font-size:10px;cursor:pointer;">Actualizar</button>
                         <span id="nomi-estado-modelo" style="font-size:9px;color:#aaa;"></span>
                     </div>
-                    <div style="font-size:9px;color:#888;margin-top:4px;">Lista ordenada por latencia estimada de OpenRouter.</div>
+                    <div style="font-size:9px;color:#888;margin-top:4px;">Lista ordenada por latencia estimada de OpenRouter. Menor número = menor latencia estimada según OpenRouter.</div>
                 </div>
                 <div style="margin-bottom:8px;"><label style="font-size:12px;color:#888;display:block;margin-bottom:2px;">URL Base</label><input type="text" id="nomi-input-url" value="${urlBaseActual}" style="width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;"></div>
                 <div style="display:flex;gap:8px;"><button id="nomi-guardar-creds" style="flex:1;padding:8px;background:#4a6cf7;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;">💾 Guardar</button><button id="nomi-importar-creds-menu" style="flex:1;padding:8px;background:#34a853;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;">📥 Importar .enc</button></div>
@@ -271,6 +271,7 @@ async function cargarModelosAlMenu(force) {
         opt.value = m.id;
         let label = `${m.name} | ${m.id}`;
         if (m.context) label += ` | ctx ${m.context}`;
+        if (m.posicion) label += ` | Latencia #${m.posicion}`;
         if (m.id === MODELO_POR_DEFECTO) label += ' — Recomendado';
         if (m.id === actual) opt.selected = true;
         opt.textContent = label;

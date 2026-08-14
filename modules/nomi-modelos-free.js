@@ -46,11 +46,13 @@ function parsearModelosFree(datos) {
             if (request !== undefined && request !== null && Number(request) !== 0) return false;
             return true;
         })
-        .map(m => ({
+        .map((m, i) => ({
             id: m.id,
             name: m.name || m.id,
             context: m.context_length ? Number(m.context_length) : null,
-            // No se expone una métrica de latencia numérica si la API no la garantiza.
+            // Posición relativa según el orden devuelto por OpenRouter (sort=latency-low-to-high).
+            // No es una medición en milisegundos: solo indica orden relativo de latencia estimada.
+            posicion: i + 1,
             peralmb: null
         }));
 }
