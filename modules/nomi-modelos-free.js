@@ -40,7 +40,10 @@ function parsearModelosFree(datos) {
             if (!m || typeof m.id !== 'string') return false;
             if (!m.id.endsWith(':free')) return false;
             const precio = m.pricing || {};
-            if (Number(precio.prompt) !== 0 || Number(precio.completion) !== 0 || Number(precio.request) !== 0) return false;
+            const request = precio.request;
+            if (precio.prompt === undefined || precio.prompt === null || Number(precio.prompt) !== 0) return false;
+            if (precio.completion === undefined || precio.completion === null || Number(precio.completion) !== 0) return false;
+            if (request !== undefined && request !== null && Number(request) !== 0) return false;
             return true;
         })
         .map(m => ({

@@ -19,7 +19,7 @@
 // ==UserScript==
 // @name         NoMi Asistente V5.8
 // @namespace    http://tampermonkey.net/
-// @version      5.12
+// @version      5.13
 // @description  Asistente IA con importación de credenciales, actualización automática y mejoras multiplataforma
 // @match        https://*/*
 // @grant        GM_xmlhttpRequest
@@ -29,25 +29,25 @@
 // @grant        GM_registerMenuCommand
 // @connect      nomi-diagnostics.osmanmezuts.workers.dev
 // @connect      openrouter.ai
-// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.12/modules/nomi-config-estatica.js
-// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.12/modules/nomi-deteccion-sistema.js
-// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.12/modules/nomi-criptografia.js
-// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.12/modules/nomi-procesamiento-lenguaje.js
-// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.12/modules/nomi-state.js
-// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.12/modules/nomi-utilities.js
-// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.12/modules/nomi-limpieza.js
-// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.12/modules/nomi-persistencia.js
-// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.12/modules/nomi-logging.js
-// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.12/modules/nomi-estadisticas.js
-// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.12/modules/nomi-chat.js
-// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.12/modules/nomi-red.js
-// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.12/modules/nomi-modelos-free.js
-// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.12/modules/nomi-credenciales.js
-// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.12/modules/nomi-ubicacion.js
-// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.12/modules/nomi-ui.js
-// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.12/modules/nomi-asistente-config.js
-// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.12/modules/nomi-menu-config.js
-// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.12/modules/nomi-core.js
+// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.13/modules/nomi-config-estatica.js
+// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.13/modules/nomi-deteccion-sistema.js
+// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.13/modules/nomi-criptografia.js
+// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.13/modules/nomi-procesamiento-lenguaje.js
+// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.13/modules/nomi-state.js
+// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.13/modules/nomi-utilities.js
+// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.13/modules/nomi-limpieza.js
+// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.13/modules/nomi-persistencia.js
+// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.13/modules/nomi-logging.js
+// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.13/modules/nomi-estadisticas.js
+// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.13/modules/nomi-chat.js
+// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.13/modules/nomi-red.js
+// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.13/modules/nomi-modelos-free.js
+// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.13/modules/nomi-credenciales.js
+// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.13/modules/nomi-ubicacion.js
+// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.13/modules/nomi-ui.js
+// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.13/modules/nomi-asistente-config.js
+// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.13/modules/nomi-menu-config.js
+// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/v5.13/modules/nomi-core.js
 // @updateURL    https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/main/NoMi%20Asistente%20V5.8.user.js
 // @downloadURL  https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/main/NoMi%20Asistente%20V5.8.user.js
 // ==/UserScript==
