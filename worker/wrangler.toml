@@ -1,0 +1,21 @@
+# nomi-diagnostics – Cloudflare Worker
+# Despliegue:  wrangler deploy
+#
+# El secreto SLACK_WEBHOOK_URL NO se pone aquí. Se configura en el panel/sitio de
+# Cloudflare o con:   wrangler secret put SLACK_WEBHOOK_URL
+#
+# El binding DIAGNOSTICS_KV apunta al namespace KV que crees.
+
+name = "nomi-diagnostics"
+main = "src/worker.js"
+compatibility_date = "2024-11-01"
+
+[vars]
+
+[[kv_namespaces]]
+binding = "DIAGNOSTICS_KV"
+# id = "RELLENAR-UNSX-field-de-cloudflare"
+preview_id = ""
+
+[observability]
+enabled = true

@@ -105,7 +105,40 @@ function getConfigInicial() { return getValor(STORAGE_CONFIG_INICIAL, false); }
 function setConfigInicial(v) { setValor(STORAGE_CONFIG_INICIAL, v); NoMiState.configuracionInicialCompletada = v; }
 function getMotorBusqueda() { return getValor(STORAGE_MOTOR_BUSQUEDA, 'tavily'); }
 function setMotorBusqueda(m) { setValor(STORAGE_MOTOR_BUSQUEDA, m); NoMiState.motorBusqueda = m; }
-function getSlackWebhook() { return getValor(STORAGE_SLACK_WEBHOOK, ''); }
-function setSlackWebhook(url) { setValor(STORAGE_SLACK_WEBHOOK, url); NoMiState.slackWebhookUrl = url; }
-function getSlackErroresActivo() { return getValor(STORAGE_SLACK_ERRORES_ACTIVO, false); }
-function setSlackErroresActivo(activo) { setValor(STORAGE_SLACK_ERRORES_ACTIVO, activo); NoMiState.slackErroresActivo = activo; }
+function getDiagnosticoActivo() { const v = getValor(STORAGE_DIAGNOSTICO_ACTIVO, null); return v === null ? true : !!v; }
+function setDiagnosticoActivo(activo) { setValor(STORAGE_DIAGNOSTICO_ACTIVO, !!activo); NoMiState.diagnosticoActivo = !!activo; }
+function getAvisoDiagnosticoVisto() { return getValor(STORAGE_DIAGNOSTICO_AVISO, false); }
+function setAvisoDiagnosticoVisto(visto) { setValor(STORAGE_DIAGNOSTICO_AVISO, !!visto); NoMiState.avisoDiagnosticoVisto = !!visto; }
+// ID aleatorio persistente por instalación (se genera una sola vez y se guarda).
+// Se usa criptografía segura (crypto.randomUUID / crypto.getRandomValues).
+// Si no hay Web Crypto disponible, se retorna null para Omitir el diagnóstico;
+// NUNCA se generan IDs con Math.random() (que no es criptográficamente seguro).
+function generarIdCriptografico() {
+    try {
+        if (typeof crypto === 'undefined' || crypto === null) {
+            return null; // sin Web Crypto no se genera un ID inseguro.
+        }
+        if (typeof crypto.randomUUID === 'function') {
+            return 'nmi-' + crypto.randomUUID();
+        }
+        if (typeof crypto.getRandomValues === 'function') {
+            const bytes = new Uint8Array(16);
+            crypto.getRandomValues(bytes);
+            const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+            return 'nmi-' + hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' + hex.slice(16);
+        }
+        // Web Crypto no disponible: se omite el diagnóstico (no se usa Math.random).
+        return null;
+    } catch {
+        return null;
+    }
+}
+function obtenerInstalacionId() {
+    let id = getValor(STORAGE_INSTALACION_ID, '');
+    if (!id) {
+        id = generarIdCriptografico();
+        if (id) { setValor(STORAGE_INSTALACION_ID, id); }
+    }
+    if (id) { NoMiState.instalacionId = id; }
+    return id;
+}

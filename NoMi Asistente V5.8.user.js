@@ -19,7 +19,7 @@
 // ==UserScript==
 // @name         NoMi Asistente V5.8
 // @namespace    http://tampermonkey.net/
-// @version      5.10
+// @version      5.11
 // @description  Asistente IA con importación de credenciales, actualización automática y mejoras multiplataforma
 // @match        https://*/*
 // @grant        GM_xmlhttpRequest
@@ -27,7 +27,8 @@
 // @grant        GM_getValue
 // @grant        GM_deleteValue
 // @grant        GM_registerMenuCommand
-// @connect      hooks.slack.com
+// @connect      nomi-diagnostics.osmanmezuts.workers.dev
+// @connect      openrouter.ai
 // @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/main/modules/nomi-config-estatica.js
 // @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/main/modules/nomi-deteccion-sistema.js
 // @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/main/modules/nomi-criptografia.js
@@ -40,6 +41,7 @@
 // @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/main/modules/nomi-estadisticas.js
 // @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/main/modules/nomi-chat.js
 // @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/main/modules/nomi-red.js
+// @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/main/modules/nomi-modelos-free.js
 // @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/main/modules/nomi-credenciales.js
 // @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/main/modules/nomi-ubicacion.js
 // @require      https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/main/modules/nomi-ui.js
@@ -77,8 +79,9 @@
     NoMiState.tavilyKeyActual = getTavilyKey();
     NoMiState.configuracionInicialCompletada = getConfigInicial();
     NoMiState.motorBusqueda = getMotorBusqueda();
-    NoMiState.slackWebhookUrl = getSlackWebhook();
-    NoMiState.slackErroresActivo = getSlackErroresActivo();
+    NoMiState.diagnosticoActivo = getDiagnosticoActivo();
+    NoMiState.avisoDiagnosticoVisto = getAvisoDiagnosticoVisto();
+    obtenerInstalacionId(); // genera/recupera el ID persistente anónimo de instalación
 
     limpiarHistorialesAntiguos();
 

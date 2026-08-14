@@ -68,6 +68,13 @@ function iniciarAsistente() {
     crearVentanaChat();
     configurarTeclado();
 
+    // Aviso único al inicio sobre el diagnóstico técnico (no se repite).
+    if (NoMiState.diagnosticoActivo && !NoMiState.avisoDiagnosticoVisto) {
+        NoMiState.avisoDiagnosticoVisto = true;
+        setAvisoDiagnosticoVisto(true);
+        mostrarNotificacionTemporal('🩺 NoMi envía un diagnóstico técnico anónimo de errores (dispositivo, red, batería). Nunca se envían claves, chats, ubicación ni URL completa. Puedes desactivarlo en ⚙️ Configuración.');
+    }
+
     if (NoMiState.ubicacionActivada && !NoMiState.ubicacionActual) {
         actualizarUbicacion(true);
     }
@@ -102,7 +109,11 @@ function iniciarAsistente() {
             }
         }, 800);
     }
-    console.log(`✅ ${NOMBRE_ASISTENTE} V${VERSION_SCRIPT} activado!`);
+        console.log(`✅ ${NOMBRE_ASISTENTE} V${VERSION_SCRIPT} activado!`);
+
+    // Verificación de disponibilidad gratuita del modelo actual (segundo plano, no bloquea).
+    // Se consulta una sola vez por pestaña/sesión (sessionStorage) en verificarModeloAlIniciar().
+    void verificarModeloAlIniciar();
 }
 
 async function preguntar(texto) {

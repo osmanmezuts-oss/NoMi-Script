@@ -36,7 +36,17 @@ function mostrarAsistenteConfiguracion() {
                     <p style="color: #888; font-size: 12px; margin-bottom: 8px;">✏️ O ingresa tus claves manualmente:</p>
                     <div style="margin-bottom: 8px;"><label style="font-size: 11px; color: #888; display: block; margin-bottom: 2px;">OpenRouter API Key *</label><input type="password" id="nomi-config-openrouter" placeholder="sk-or-v1-..." style="width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #555; background: #0d0d1a; color: #fff; font-size: 12px;"></div>
                     <div style="margin-bottom: 8px;"><label style="font-size: 11px; color: #888; display: block; margin-bottom: 2px;">Tavily API Key *</label><input type="password" id="nomi-config-tavily" placeholder="tvly-..." style="width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #555; background: #0d0d1a; color: #fff; font-size: 12px;"></div>
-                    <div style="margin-bottom: 8px;"><label style="font-size: 11px; color: #888; display: block; margin-bottom: 2px;">Modelo (opcional)</label><input type="text" id="nomi-config-modelo" placeholder="${MODELO_POR_DEFECTO}" style="width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #555; background: #0d0d1a; color: #fff; font-size: 12px;"></div>
+                                        <div style="margin-bottom: 8px;">
+                        <label style="font-size: 11px; color: #888; display: block; margin-bottom: 2px;">Modelo gratuito (opcional)</label>
+                        <select id="nomi-config-modelo" style="width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #555; background: #0d0d1a; color: #fff; font-size: 12px;">
+                            <option value="${MODELO_POR_DEFECTO}">${MODELO_POR_DEFECTO} — Recomendado</option>
+                        </select>
+                        <div style="display:flex;gap:4px;align-items:center;margin-top:4px;">
+                            <button id="nomi-config-refrescar-modelos" style="flex:1;padding:6px;background:#3a4a6a;border:none;border-radius:6px;color:#fff;font-size:11px;cursor:pointer;">Actualizar modelos gratis</button>
+                            <span id="nomi-config-estado-modelo" style="font-size:10px;color:#aaa;"></span>
+                        </div>
+                        <div style="font-size:10px;color:#888;margin-top:4px;">Lista ordenada por latencia estimada de OpenRouter.</div>
+                    </div>
                     <div style="margin-bottom: 8px;"><label style="font-size: 11px; color: #888; display: block; margin-bottom: 2px;">URL Base (opcional)</label><input type="text" id="nomi-config-url" placeholder="${URL_BASE_POR_DEFECTO}" style="width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #555; background: #0d0d1a; color: #fff; font-size: 12px;"></div>
                     <button id="nomi-config-guardar" style="width: 100%; padding: 10px; background: #34a853; border: none; border-radius: 8px; color: #fff; font-size: 13px; cursor: pointer;">💾 Guardar credenciales</button>
                 </div>
@@ -51,7 +61,11 @@ function mostrarAsistenteConfiguracion() {
     `;
     document.body.appendChild(asistente);
 
+    void cargarModelosAsistente(false);
+
     document.getElementById('nomi-config-importar').onclick = () => importarCredenciales();
+    // "Actualizar modelos gratis": consulta OpenRouter (fuerza) y repuebla el <select>.
+    document.getElementById('nomi-config-refrescar-modelos').onclick = () => cargarModelosAsistente(true);
     document.getElementById('nomi-config-guardar').onclick = () => {
         const apiKey = document.getElementById('nomi-config-openrouter').value.trim();
         const tavilyKey = document.getElementById('nomi-config-tavily').value.trim();
@@ -83,8 +97,35 @@ function mostrarAsistenteConfiguracion() {
                 if (!(ultimoMensaje.role === 'assistant' && ultimoMensaje.content.includes('Aún no has importado'))) {
                     agregarMensaje('bot', '⚠️ **Aún no has configurado tus credenciales.**\n\nVe al menú (⚙️) y selecciona "Importar credenciales" o ingresa tus claves manualmente para activar la búsqueda web y el acceso a la IA.\n\nMientras tanto, puedo ayudarte con comandos básicos como `!cmd` para ver la lista de comandos.');
                 }
-            }
+                        }
         }
     };
 }
 
+// ---- Poblado del selector de modelos gratuitos en el asistente inicial ----
+// La opción por defecto (MODELO_POR_DEFECTO) ya está presente al crear el <select>; al
+// refrescar se repuebla con el catálogo filtrado (solo :free, precio 0).
+async function cargarModelosAsistente(force) {
+    const select = document.getElementById('nomi-config-modelo');
+    const estado = document.getElementById('nomi-config-estado-modelo');
+    if (!select) return;
+    if (!force && select.options.length > 1) return; // ya poblado previamente.
+    estado.textContent = 'Cargando…';
+    try {
+        const lista = await fetchFreeModelos(force);
+        const actual = select.value || MODELO_POR_DEFECTO;
+        select.innerHTML = '';
+        lista.forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = m.id;
+            let label = `${m.name} | ${m.id}`;
+            if (m.context) label += ` | ctx ${m.context}`;
+            if (m.id === MODELO_POR_DEFECTO) label += ' — Recomendado';
+            if (m.id === actual) opt.selected = true;
+            opt.textContent = label;
+            select.appendChild(opt);
+        });
+    } catch (e) {
+        estado.textContent = e instanceof OpenRouterRateLimitError ? 'Limitado (429)' : 'No se pudo cargar';
+    }
+}

@@ -17,45 +17,93 @@ function registrarError(tipo, mensaje, contexto) {
         logs.push(entrada);
         if (logs.length > 20) logs.shift();
         setValor(STORAGE_ERROR_LOGS, logs);
-        enviarErrorASlack(entrada);
+        enviarDiagnostico(entrada);
     } catch (e) {
         console.warn('No se pudo registrar el error:', e);
     }
 }
 
-function limpiarDatoParaSlack(valor) {
+function limpiarDatoParaDiagnostico(valor) {
     return String(valor || '')
-        .replace(/https:\/\/hooks\.slack\.com\/services\/[^\s]+/gi, '[webhook oculto]')
-        .replace(/(?:sk-or-v1-|tvly-)[A-Za-z0-9_-]+/g, '[clave oculta]')
-        .slice(0, 1000);
+        // Nunca se envían claves, tokens ni webhooks.
+        .replace(/(?:sk-or-v1-|tvly-|gh[pousr]_|sk-)[A-Za-z0-9_-]+/g, '[clave oculta]')
+        .replace(/https:\/\/[^\s]+/gi, (u) => {
+            // Reducir URLs a dominio + ruta sencilla (sin query ni secreto).
+            try {
+                const p = new URL(u);
+                p.search = ''; p.hash = ''; p.username = ''; p.password = '';
+                return p.origin + p.pathname;
+            } catch { return '[url]'; }
+        })
+        .replace(/([?&](?:key|token|secret|password|api_key|auth|sig)=)[^\s&]+/gi, '$1[oculto]')
+        .slice(0, 500);
 }
 
-async function enviarErrorASlack(error) {
-    if (!NoMiState.slackErroresActivo || !NoMiState.slackWebhookUrl) return;
+// Contexto técnico mínimo (dispositivo, red y batería) SOLO si está disponible.
+// Nunca se envía ubicación exacta ni URL completa.
+async function obtenerContextoTecnico() {
+    const ctx = {};
+    try {
+        const s = obtenerInfoSistema();
+        ctx.device = s.screenSize || '';
+        ctx.platform = s.platform || '';
+        ctx.mobile = !!s.isMobile;
+    } catch (e) { /* ignora */ }
+    try {
+        // Red (Connection API): tipo de conexión estimado, sin datos de páginas.
+        const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+        if (conn && conn.effectiveType) {
+            ctx.red = conn.effectiveType + (typeof conn.saveData === 'boolean' && conn.saveData ? '/ahorro' : '');
+        }
+    } catch (e) { /* ignora */ }
+    try {
+        // Batería (Battery API) si existe.
+        if (navigator.getBattery) {
+            const b = await navigator.getBattery();
+            if (b && typeof b.level === 'number') {
+                ctx.bateria = Math.round((b.level || 0) * 100) + '%' + (b.charging ? ' (cargando)' : '');
+            }
+        }
+    } catch (e) { /* ignora */ }
+    return ctx;
+}
+
+// Envía el error a nomi-diagnostics (POST /v1/diagnostics) de forma no bloqueante.
+async function enviarDiagnostico(error) {
+    if (!NoMiState.diagnosticoActivo) return;
+    // Asegura ID de instalación persistente (anónimo) y seguro.
+    const instalacionId = obtenerInstalacionId();
+    // Si no hay crypto disponible el ID es null: se omite el envío (no se usan IDs inseguros).
+    if (!instalacionId) return;
+
+    let tec = {};
+    try { tec = await obtenerContextoTecnico(); } catch (e) { /* ignora */ }
+
+    // Nunca se envía URL completa: sólo el dominio del sitio.
+    let dominio = '';
+    try { dominio = window.location.hostname; } catch (e) { /* ignora */ }
 
     try {
-        const pagina = window.location.origin + window.location.pathname;
-        const respuesta = await hacerPeticion(NoMiState.slackWebhookUrl, {
+        await hacerPeticion(DIAGNOSTICS_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                text: `:warning: *Error de NoMi*\n*Tipo:* ${limpiarDatoParaSlack(error.type)}\n*Mensaje:* ${limpiarDatoParaSlack(error.message)}\n*Contexto:* ${limpiarDatoParaSlack(error.context)}\n*Versión:* ${VERSION_SCRIPT}\n*Página:* ${pagina}\n*Fecha:* ${error.timestamp}`
+                type: error.type || 'desconocido',
+                message: limpiarDatoParaDiagnostico(error.message),
+                context: limpiarDatoParaDiagnostico(error.context || ''),
+                version: VERSION_SCRIPT,
+                url: dominio,
+                device: tec.device || '',
+                platform: tec.platform || '',
+                mobile: !!tec.mobile,
+                red: tec.red || '',
+                bateria: tec.bateria || '',
+                instalacionId: instalacionId
             })
         });
-        if (respuesta !== 'ok') throw new Error('Slack no confirmó el envío.');
     } catch (e) {
-        console.warn('No se pudo enviar el error a Slack:', e.message);
+        console.warn('Diagnóstico no enviado:', e && e.message);
     }
-}
-
-async function probarConexionSlack() {
-    if (!NoMiState.slackWebhookUrl) throw new Error('Primero pega la URL del webhook de Slack.');
-    const respuesta = await hacerPeticion(NoMiState.slackWebhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: ':white_check_mark: *NoMi conectado correctamente a Slack.* Los próximos errores se enviarán a este canal.' })
-    });
-    if (respuesta !== 'ok') throw new Error('Slack no confirmó la conexión.');
 }
 
 function exportarLogs() {

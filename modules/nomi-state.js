@@ -32,6 +32,7 @@ window.NoMiState = {
     tavilyKeyActual: '',
     configuracionInicialCompletada: false,
     motorBusqueda: 'tavily',
-    slackWebhookUrl: '',
-    slackErroresActivo: false
+    diagnosticoActivo: true,
+    instalacionId: '',
+    avisoDiagnosticoVisto: false
 };

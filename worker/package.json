@@ -1,0 +1,10 @@
+{
+  "name": "nomi-diagnostics-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Worker de telemetría de errores anónima y mínima para NoMi",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/"
+  }
+}
