@@ -1,0 +1,27 @@
+name = "nomi-api-worker"
+main = "src/index.js"
+compatibility_date = "2025-08-01"
+
+# ====== BINDINGS (crear en Cloudflare, NO incluir valores reales) ======
+# Secretos (wrangler secret put):
+#   GROQ_API_KEY        -> API key de Groq
+#   ADMIN_SECRET        -> token para endpoints administrativos privados
+#   ACCESS_TOKEN_SECRET -> pepper HMAC para hashes de códigos/tokens de acceso
+
+# D1: base de datos de usuarios, invitaciones, cuota mensual y contadores.
+# Crear con: wrangler d1 create nomi-api-db  (anotar el database_id)
+[[d1_databases]]
+binding = "NOMI_DB"
+database_name = "nomi-api-db"
+database_id = "REEMPLAZAR_CON_DATABASE_ID"
+
+# Durable Object para límites globales y bolsa de créditos (no se confía en contadores locales).
+[durable_objects]
+bindings = [{ name = "RATE_LIMITER", class_name = "RateLimiterDO" }]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RateLimiterDO"]
+
+[vars]
+NOMI_API_VERSION = "0.1.0"

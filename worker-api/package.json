@@ -1,0 +1,11 @@
+{
+  "name": "nomi-api-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Worker Cloudflare de acceso compartido a IA para NoMi (Fase 1). NoMi -> nomi-api Worker -> Groq.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "devDependencies": {}
+}
