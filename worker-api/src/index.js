@@ -18,6 +18,7 @@ import { CATALOGO, modeloPermitido, catalogoPublico } from './catalogo.js';
 import { BaseDatos } from './db.js';
 import { llamarGroq } from './groq.js';
 import { RateLimiterDO } from './rate-limiter-do.js';
+export { RateLimiterDO };
 import { decidirModo, CAPACIDAD } from './capacidad.js';
 import { CREDITOS, LIMITES_GROQ, RESERVA, CAPACIDAD_DIARIA, periodoActual, diaActual } from './limites.js';
 import { igualEnTiempoConstante, generarCodigoInvitacion, generarTokenInstalacion } from './crypto.js';
