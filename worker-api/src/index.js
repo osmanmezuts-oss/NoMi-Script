@@ -256,10 +256,49 @@ function registrarEvidencia(tipo, datos) {
 async function handlerAdminInvitacion(env, request) {
     autenticarAdmin(env, request);
     // Limita el cuerpo (incluso sin Content-Length) antes de procesar.
-    await leerJsonLimitado(request, RESERVA.MAX_CUERPO_BYTES);
+    const cuerpo = await leerJsonLimitado(request, RESERVA.MAX_CUERPO_BYTES);
+
+    // Etiqueta opcional, limitada y validada (texto corto, sin secretos).
+    let etiqueta = null;
+    if (cuerpo && cuerpo.etiqueta !== undefined && cuerpo.etiqueta !== null) {
+        if (typeof cuerpo.etiqueta !== 'string') throw E.parametrosInvalidos('La etiqueta debe ser texto.');
+        const t = cuerpo.etiqueta.trim();
+        if (t.length === 0) throw E.parametrosInvalidos('La etiqueta no puede estar vacía.');
+        if (t.length > 64) throw E.parametrosInvalidos('La etiqueta es demasiado larga (máx. 64).');
+        if (!/^[\p{L}\p{N} _\-]+$/u.test(t)) throw E.parametrosInvalidos('La etiqueta contiene caracteres no permitidos.');
+        etiqueta = t;
+    }
+
     const db = new BaseDatos(env.NOMI_DB, env.ACCESS_TOKEN_SECRET);
-    const { codigo } = await db.crearInvitacion();
-    return json({ ok: true, codigo }, 201);
+    const { codigo, id } = await db.crearInvitacion(etiqueta);
+    return json({ ok: true, codigo, id }, 201);
+}
+
+// Listado administrativo: estado, id, fechas, etiqueta y usuario vinculado.
+// NUNCA incluye códigos, hashes ni tokens.
+async function handlerAdminListado(env, request) {
+    autenticarAdmin(env, request);
+    const db = new BaseDatos(env.NOMI_DB, env.ACCESS_TOKEN_SECRET);
+    const invitaciones = await db.listarInvitaciones();
+    return json({ ok: true, invitaciones }, 200);
+}
+
+// Revocación administrativa por id (transaccional con D1). Revoca la invitación
+// y, si estaba canjeada, también el usuario vinculado (su token deja de autenticar).
+async function handlerAdminRevocar(env, request) {
+    autenticarAdmin(env, request);
+    const cuerpo = await leerJsonLimitado(request, RESERVA.MAX_CUERPO_BYTES);
+    const id = String(cuerpo.id || '').trim();
+    if (!id) throw E.parametrosInvalidos('Falta el id de la invitación.');
+    if (id.length > 64) throw E.parametrosInvalidos('El id de la invitación es demasiado largo.');
+
+    const db = new BaseDatos(env.NOMI_DB, env.ACCESS_TOKEN_SECRET);
+    const resultado = await db.revocarInvitacion(id);
+    if (!resultado.ok) {
+        if (resultado.motivo === 'no_encontrada') throw E.noEncontrado();
+        throw E.invitacionYaRevocada();
+    }
+    return json({ ok: true, usuarioRevocado: resultado.usuarioRevocado }, 200);
 }
 
 async function handlerAdminLiberar(env, request) {
@@ -288,6 +327,8 @@ export default {
             if (request.method === 'GET' && p === '/v1/usage') return await handlerUso(env, request);
             if (request.method === 'POST' && p === '/v1/chat') return await handlerChat(env, request);
             if (request.method === 'POST' && p === '/admin/invitacion') return await handlerAdminInvitacion(env, request);
+            if (request.method === 'GET' && p === '/admin/invitaciones') return await handlerAdminListado(env, request);
+            if (request.method === 'POST' && p === '/admin/revocar') return await handlerAdminRevocar(env, request);
             if (request.method === 'POST' && p === '/admin/liberar') return await handlerAdminLiberar(env, request);
             throw E.noEncontrado();
         } catch (err) {

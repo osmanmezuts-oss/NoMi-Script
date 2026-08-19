@@ -23,14 +23,21 @@ export class BaseDatos {
         return bound.first();
     }
 
+    async all(sql, ...params) {
+        const stmt = this.db.prepare(sql);
+        const bound = params.length ? stmt.bind(...params) : stmt;
+        return bound.all();
+    }
+
     // ---- Invitaciones (solo hash) ----
-    async crearInvitacion() {
+    // `etiqueta` es opcional, validada por el handler admin; nunca contiene secreto.
+    async crearInvitacion(etiqueta = null) {
         const codigo = this.generarCodigo();
         const id = generarIdOpaque();
         const codigoHash = await hashCodigo(this.secret, codigo);
         await this.run(
-            'INSERT INTO invitaciones (id, codigo_hash, estado, creada_en) VALUES (?, ?, ?, ?)',
-            id, codigoHash, 'pendiente', Date.now()
+            'INSERT INTO invitaciones (id, codigo_hash, estado, etiqueta, creada_en) VALUES (?, ?, ?, ?, ?)',
+            id, codigoHash, 'pendiente', etiqueta, Date.now()
         );
         return { codigo, id };
     }
@@ -63,7 +70,7 @@ export class BaseDatos {
              SELECT ?, ?, 'invitado', 'activo', ?, id
              FROM invitaciones
              WHERE codigo_hash = ? AND estado = 'pendiente'
-               AND (SELECT COUNT(*) FROM usuarios WHERE rol = 'invitado') < ?`
+               AND (SELECT COUNT(*) FROM usuarios WHERE rol = 'invitado' AND estado = 'activo') < ?`
         ).bind(id, tokenHash, creadoEn, codigoHash, limite);
 
         const canjear = this.db.prepare(
@@ -83,6 +90,53 @@ export class BaseDatos {
             return { ok: false, motivo: 'invalida' };
         }
         return { ok: true, token, id };
+    }
+
+    // ---- Revocación administrativa (transaccional y atómica vía DB.batch) ----
+    // Revoca la invitación (pendiente o canjeada) y, si estaba canjeada, también
+    // revoca el usuario vinculado (su token deja de autenticar). Ambas sentencias
+    // se ejecutan en UNA transacción D1: o se aplican las dos o ninguna.
+    //   - invitación pendiente -> queda 'revocada' (el código ya no activa).
+    //   - invitación canjeada  -> 'revocada' + usuario 'revocado' (libera cupo).
+    // Resultado:
+    //   { ok:true, usuarioRevocado }       -> revocada; usuarioRevocado=true si había usuario activo.
+    //   { ok:false, motivo:'no_encontrada'}-> id inexistente.
+    //   { ok:false, motivo:'ya_revocada' } -> ya estaba revocada (idempotente a efectos).
+    async revocarInvitacion(id, revocadaEn = Date.now()) {
+        const revocarInv = this.db.prepare(
+            `UPDATE invitaciones SET estado = 'revocada', revocada_en = ?
+             WHERE id = ? AND estado IN ('pendiente', 'canjeada')`
+        ).bind(revocadaEn, id);
+
+        const revocarUsuario = this.db.prepare(
+            `UPDATE usuarios SET estado = 'revocado'
+             WHERE invitacion_id = ? AND estado = 'activo'`
+        ).bind(id);
+
+        const resultados = await this.db.batch([revocarInv, revocarUsuario]);
+        const invCambiada = !!(resultados && resultados[0] && resultados[0].meta && resultados[0].meta.changes === 1);
+
+        if (!invCambiada) {
+            const inv = await this.first('SELECT estado FROM invitaciones WHERE id = ?', id);
+            if (!inv) return { ok: false, motivo: 'no_encontrada' };
+            return { ok: false, motivo: 'ya_revocada' };
+        }
+        const usuarioRevocado = !!(resultados[1] && resultados[1].meta && resultados[1].meta.changes === 1);
+        return { ok: true, usuarioRevocado };
+    }
+
+    // ---- Listado administrativo (sin códigos, hashes ni tokens) ----
+    // Devuelve estado, id, fechas, etiqueta y el usuario vinculado (si existe),
+    // nunca códigos, hashes ni tokens. Ordenado por creación descendente.
+    async listarInvitaciones() {
+        const r = await this.all(
+            `SELECT i.id, i.estado, i.creada_en, i.canjeada_en, i.revocada_en, i.etiqueta,
+                    u.id AS usuario_id, u.rol AS usuario_rol, u.estado AS usuario_estado, u.creado_en AS usuario_creado_en
+             FROM invitaciones i
+             LEFT JOIN usuarios u ON u.invitacion_id = i.id
+             ORDER BY i.creada_en DESC`
+        );
+        return (r && r.results) || [];
     }
 
     async buscarPorToken(token) {

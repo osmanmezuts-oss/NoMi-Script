@@ -48,15 +48,37 @@ en el repositorio; solo referencia nombres de secretos/bindings.
 | GET | `/v1/catalog` | Catálogo de modelos (sin credenciales) |
 | GET | `/v1/usage` | Uso/cuota del invitado autenticado |
 | POST | `/v1/chat` | Chat vía Groq (modelo allowlist) |
-| POST | `/admin/invitacion` | Crear invitación (requiere `ADMIN_SECRET`) |
+| POST | `/admin/invitacion` | Crear invitación (requiere `ADMIN_SECRET`); acepta `etiqueta` opcional |
+| GET | `/admin/invitaciones` | Listar invitaciones (estado, id, fechas, etiqueta, usuario vinculado) |
+| POST | `/admin/revocar` | Revocar invitación por `id` (transaccional) |
 | POST | `/admin/liberar` | Liberar reserva → bolsa (idempotente) |
 
 Respuestas `cache-control: no-store` y CORS mínimo (`GET, POST, OPTIONS`).
 
+### Gestión administrativa de invitaciones
+
+Los endpoints `/admin/*` requieren `ADMIN_SECRET` (Bearer). No devuelven nunca
+códigos, hashes ni tokens de instalación.
+
+- **Etiqueta opcional:** `POST /admin/invitacion` acepta `etiqueta` (texto, máx. 64
+  caracteres, `/^[\p{L}\p{N} _\-]+$/u`). Es solo una nota del administrador, sin secreto.
+- **Listado:** `GET /admin/invitaciones` devuelve estado, `id`, fechas de creación/canje/revocación,
+  `etiqueta` y el usuario vinculado (si existe). Ordenado por creación descendente.
+- **Revocación (`POST /admin/revocar`, cuerpo `{ "id": "<id>" }`):** revoca la invitación
+  de forma **transaccional** (`DB.batch`):
+  - Invitación **pendiente** → queda `revocada` (el código ya no activa).
+  - Invitación **canjeada** → queda `revocada` **y** revoca el usuario vinculado
+    (`estado='revocado'`), por lo que su token de instalación deja de autenticar.
+  - **Liberación de cupo:** el tope de 10 invitados cuenta únicamente usuarios invitados
+    con `estado='activo'`; al revocar un invitado canjeado su cupo queda libre.
+  - Se conserva el historial: no se borran invitaciones, usuarios ni hashes.
+  - Idempotente a efectos: revocar una ya revocada devuelve `409 invitacion-ya-revocada`;
+    un `id` inexistente devuelve `404`.
+
 ### Errores
-`acceso-invalido`, `invitacion-invalida`, `cuota-mensual-agotada`,
-`capacidad-temporal-limitada`, `modelo-no-permitido`, `proveedor-no-disponible`,
-`parametros-invalidos`, `admin-no-autorizado`, `no-encontrado`.
+ `acceso-invalido`, `invitacion-invalida`, `cuota-mensual-agotada`,
+ `capacidad-temporal-limitada`, `modelo-no-permitido`, `proveedor-no-disponible`,
+ `parametros-invalidos`, `admin-no-autorizado`, `no-encontrado`, `invitacion-ya-revocada`.
 
 ## Pasos manuales de Cloudflare (Fase 1)
 

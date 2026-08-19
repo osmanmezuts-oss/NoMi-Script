@@ -17,7 +17,21 @@ export function crearD1Stub() {
         const val = () => p[i++];
         if (sql.includes('FORCE_FAIL')) throw new Error('fallo simulado de sentencia (stub)');
         if (/^INSERT INTO invitaciones/.test(sql)) {
-            tablas.invitaciones.push({ id: val(), codigo_hash: val(), estado: val(), creada_en: val() });
+            const id = val(); const codigo_hash = val(); const estado = val();
+            // El código nuevo inserta (id, codigo_hash, estado, etiqueta, creada_en);
+            // el SQL crudo de pruebas inserta (id, codigo_hash, estado, creada_en).
+            let etiqueta = null; let creada_en;
+            const resto = p.length - i;
+            if (resto >= 2) { etiqueta = val(); creada_en = val(); }
+            else { creada_en = val(); }
+            tablas.invitaciones.push({ id, codigo_hash, estado, etiqueta: etiqueta ?? null, creada_en, revocada_en: null });
+            return { meta: { changes: 1 } };
+        }
+        if (/^UPDATE invitaciones SET estado\s*=\s*'revocada'/.test(sql)) {
+            const revocadaEn = val(); const id = val();
+            const fila = tablas.invitaciones.find(r => r.id === id && (r.estado === 'pendiente' || r.estado === 'canjeada'));
+            if (!fila) return { meta: { changes: 0 } };
+            fila.estado = 'revocada'; fila.revocada_en = revocadaEn;
             return { meta: { changes: 1 } };
         }
         if (/^UPDATE invitaciones SET estado='canjeada'/.test(sql)) {
@@ -42,7 +56,7 @@ export function crearD1Stub() {
                 const id = val(); const tokenHash = val(); const creadoEn = val(); const codigoHash = val(); const limite = val();
                 const invitacion = tablas.invitaciones.find(r => r.codigo_hash === codigoHash && r.estado === 'pendiente');
                 if (!invitacion) return { meta: { changes: 0 } };
-                const n = tablas.usuarios.filter(r => r.rol === 'invitado').length;
+                const n = tablas.usuarios.filter(r => r.rol === 'invitado' && r.estado === 'activo').length;
                 if (n >= limite) return { meta: { changes: 0 } };
                 tablas.usuarios.push({ id, token_hash: tokenHash, rol: 'invitado', estado: 'activo', creado_en: creadoEn, invitacion_id: invitacion.id });
                 return { meta: { changes: 1 } };
@@ -81,6 +95,13 @@ export function crearD1Stub() {
             const fila = tablas.uso_mensual.find(r => r.usuario_id === uid && r.periodo === periodo);
             if (fila) { fila.tokens = Math.max(0, fila.tokens - aLiberar); return { meta: { changes: 1 } }; }
             return { meta: { changes: 0 } };
+        }
+        if (/^UPDATE usuarios SET estado\s*=\s*'revocado'/.test(sql)) {
+            const invId = val();
+            const fila = tablas.usuarios.find(r => r.invitacion_id === invId && r.estado === 'activo');
+            if (!fila) return { meta: { changes: 0 } };
+            fila.estado = 'revocado';
+            return { meta: { changes: 1 } };
         }
         if (/^UPDATE usuarios SET primer_uso_dia/.test(sql)) {
             const dia = val(); const id = val();
@@ -139,6 +160,16 @@ export function crearD1Stub() {
     function firstSql(sql, p) {
         let i = 0;
         const val = () => p[i++];
+        if (/^SELECT estado FROM invitaciones WHERE id/.test(sql)) {
+            const idv = val();
+            const fila = tablas.invitaciones.find(r => r.id === idv);
+            return fila ? { estado: fila.estado } : null;
+        }
+        if (/^SELECT id, estado, codigo_hash FROM invitaciones/.test(sql)) {
+            const idv = val();
+            const fila = tablas.invitaciones.find(r => r.id === idv);
+            return fila ? { id: fila.id, estado: fila.estado, codigo_hash: fila.codigo_hash } : null;
+        }
         if (/^SELECT id FROM invitaciones/.test(sql)) {
             const codigoHash = val();
             const fila = tablas.invitaciones.find(r => r.codigo_hash === codigoHash);
@@ -176,6 +207,29 @@ export function crearD1Stub() {
         return null;
     }
 
+    function allSql(sql, p) {
+        if (/LEFT JOIN usuarios u/.test(sql)) {
+            const filas = tablas.invitaciones.map(i => {
+                const u = tablas.usuarios.find(x => x.invitacion_id === i.id) || null;
+                return {
+                    id: i.id,
+                    estado: i.estado,
+                    creada_en: i.creada_en ?? null,
+                    canjeada_en: i.canjeada_en ?? null,
+                    revocada_en: i.revocada_en ?? null,
+                    etiqueta: i.etiqueta ?? null,
+                    usuario_id: u ? u.id : null,
+                    usuario_rol: u ? u.rol : null,
+                    usuario_estado: u ? u.estado : null,
+                    usuario_creado_en: u ? u.creado_en : null,
+                };
+            });
+            filas.sort((a, b) => (b.creada_en || 0) - (a.creada_en || 0));
+            return { results: filas };
+        }
+        return { results: [] };
+    }
+
     const api = {
         prepare(sql) {
             let bound = [];
@@ -184,6 +238,7 @@ export function crearD1Stub() {
                 bind,
                 run: () => runSql(sql, bound),
                 first: () => firstSql(sql, bound),
+                all: () => allSql(sql, bound),
             };
             return stmt;
         },

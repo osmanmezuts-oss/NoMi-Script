@@ -13,7 +13,7 @@ compatibility_date = "2025-08-01"
 [[d1_databases]]
 binding = "NOMI_DB"
 database_name = "nomi-api-db"
-database_id = "REEMPLAZAR_CON_DATABASE_ID"
+database_id = "e7bfa3b1-af8d-4406-91e5-dfdd0b63ecac"
 
 # Durable Object para límites globales y bolsa de créditos (no se confía en contadores locales).
 [durable_objects]

@@ -20,6 +20,7 @@ export const E = {
     noEncontrado: () => new ApiError('no-encontrado', 'Recurso no encontrado.', 404),
     metodoInvalido: () => new ApiError('metodo-invalido', 'Método no permitido.', 405),
     adminNoAutorizado: () => new ApiError('admin-no-autorizado', 'Administración no autorizada.', 401),
+    invitacionYaRevocada: () => new ApiError('invitacion-ya-revocada', 'La invitación ya está revocada.', 409),
     parametrosInvalidos: (detalle) => new ApiError('parametros-invalidos', detalle || 'Parámetros inválidos.', 400),
     noCacheError: () => new ApiError('sin-cache', 'Operación sin caché requerida.', 400),
 };

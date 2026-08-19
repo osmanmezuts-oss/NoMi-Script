@@ -8,15 +8,17 @@ CREATE TABLE IF NOT EXISTS invitaciones (
     id TEXT PRIMARY KEY,             -- id opaca (no determinística)
     codigo_hash TEXT NOT NULL UNIQUE,-- HMAC-SHA256(codigo, ACCESS_TOKEN_SECRET)
     estado TEXT NOT NULL DEFAULT 'pendiente',  -- pendiente | canjeada | revocada
+    etiqueta TEXT,                   -- etiqueta opcional del administrador (sin secreto)
     creada_en INTEGER NOT NULL,      -- epoch ms
-    canjeada_en INTEGER
+    canjeada_en INTEGER,
+    revocada_en INTEGER              -- epoch ms de la revocación (historial)
 );
 
 CREATE TABLE IF NOT EXISTS usuarios (
     id TEXT PRIMARY KEY,             -- id opaco de instalación
     token_hash TEXT NOT NULL UNIQUE, -- HMAC-SHA256(token, ACCESS_TOKEN_SECRET)
     rol TEXT NOT NULL DEFAULT 'invitado',  -- invitado | propietario
-    estado TEXT NOT NULL DEFAULT 'activo', -- activo | suspendido
+    estado TEXT NOT NULL DEFAULT 'activo', -- activo | suspendido | revocado
     creado_en INTEGER NOT NULL,
     invitacion_id TEXT UNIQUE REFERENCES invitaciones(id), -- vínculo 1:1 con la invitación (activación única)
     primer_uso_dia TEXT,             -- 'YYYY-MM-DD' del primer uso del día (para prioridad)
