@@ -1,6 +1,8 @@
 // Pruebas de la capacidad diaria real de Groq (Durable Object como única fuente
 // de verdad). Sin llamadas reales a Groq ni secretos. Ejecutar: node --test test/
 
+import './setup-crypto.js';
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 

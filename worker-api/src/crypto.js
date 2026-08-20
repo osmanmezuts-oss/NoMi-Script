@@ -4,18 +4,12 @@
 
 const enc = new TextEncoder();
 
-// Web Crypto: Cloudflare Workers expone `crypto` como global. En Node 18 (donde se
-// ejecutan las pruebas) ese global no está habilitado por defecto, así que se vale
-// del shim `node:crypto` (webcrypto). La importación es perezosa y sólo se evalúa en
-// Node: en el Worker, la rama `else` nunca se ejecuta y no se carga el módulo node.
+// Web Crypto está disponible como global tanto en Cloudflare Workers como en Node 20+
+// (globalThis.crypto). Se usa directamente sin dependencias de Node, lo que
+// evita requerir el flag nodejs_compat y la advertencia de bundling (y un posible
+// fallo de instanciación del módulo en el Worker por un specifier `node:` no resuelto).
 // Toda la entropía proviene de getRandomValues (CSPRNG); no se usan RNG no criptográficos.
-let cryptoGlobal;
-if (typeof crypto !== 'undefined') {
-    cryptoGlobal = crypto;
-} else {
-    const { webcrypto } = await import('node:crypto');
-    cryptoGlobal = webcrypto;
-}
+const cryptoGlobal = globalThis.crypto;
 
 function bytesToHex(bytes) {
     return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -29,6 +23,11 @@ function bytesToB64url(bytes) {
 
 // HMAC-SHA256(secreto, valor) en hex. Usado como "hash" irreversible con pepper.
 export async function hmacHash(secret, valor) {
+    // Guarda explícita: un pepper vacío/absente produce un DOMException críptico
+    // (HMAC key length 0). Mejor fallar con mensaje claro y sin exponer el secreto.
+    if (typeof secret !== 'string' || secret.length === 0) {
+        throw new Error('hmac: ACCESS_TOKEN_SECRET ausente o vacío (configura el secreto en el Worker)');
+    }
     const key = await cryptoGlobal.subtle.importKey(
         'raw',
         enc.encode(secret),

@@ -1,6 +1,8 @@
 // Pruebas del Durable Object (límites globales) y liberación de reserva.
 // Sin llamadas reales ni secretos. Ejecutar con: node --test test/
 
+import './setup-crypto.js';
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 

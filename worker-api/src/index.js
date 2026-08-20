@@ -44,6 +44,10 @@ function json(objeto, status = 200) {
 
 function errorHandler(err) {
     if (err instanceof ApiError) return json({ error: err.code, mensaje: err.message }, err.status);
+    // Logging mínimo y seguro: SOLO tipo y mensaje. Nunca headers, cuerpo, tokens, secretos ni stack.
+    try {
+        console.error('[nomi-api][error]', err && err.constructor && err.constructor.name, err && err.message);
+    } catch { /* nunca debe romper el flujo */ }
     return json({ error: 'interno', mensaje: 'Error interno.' }, 500);
 }
 

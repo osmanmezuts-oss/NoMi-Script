@@ -1,6 +1,8 @@
 // Pruebas de la API de acceso (Fase 1). Sin llamadas reales a Groq ni secretos.
 // Se ejecutan con: node --test test/
 
+import './setup-crypto.js';
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 

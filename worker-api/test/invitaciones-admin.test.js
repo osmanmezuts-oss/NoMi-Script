@@ -1,6 +1,8 @@
 // Pruebas de la fase administrativa de invitaciones (Fase 1, backend admin).
 // Sin llamadas reales a Groq ni secretos. Ejecutar con: node --test test/
 
+import './setup-crypto.js';
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
