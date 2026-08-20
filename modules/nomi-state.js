@@ -34,5 +34,10 @@ window.NoMiState = {
     motorBusqueda: 'tavily',
     diagnosticoActivo: true,
     instalacionId: '',
-    avisoDiagnosticoVisto: false
+    avisoDiagnosticoVisto: false,
+    modoAcceso: MODO_ACCESO_OPENROUTER,
+    nomiWorkerUrl: NOMI_WORKER_URL_POR_DEFECTO,
+    nomiToken: '',
+    nomiModelo: NOMI_MODELO_POR_DEFECTO,
+    nomiAccesoActivo: false
 };

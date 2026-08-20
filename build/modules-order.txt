@@ -10,6 +10,7 @@ nomi-logging.js
 nomi-estadisticas.js
 nomi-chat.js
 nomi-red.js
+nomi-acceso-nomi.js
 nomi-modelos-free.js
 nomi-credenciales.js
 nomi-ubicacion.js

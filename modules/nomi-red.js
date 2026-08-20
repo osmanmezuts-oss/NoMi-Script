@@ -14,7 +14,9 @@ function hacerPeticion(url, opciones) {
                         try { resolve(JSON.parse(resp.responseText)); }
                         catch (e) { resolve(resp.responseText); }
                     } else {
-                        reject(new Error(`Error ${resp.status}: ${resp.responseText}`));
+                        const e = new Error(`Error ${resp.status}: ${resp.responseText}`);
+                        e.status = resp.status;
+                        reject(e);
                     }
                 },
                 onerror: (err) => {
@@ -30,7 +32,11 @@ function hacerPeticion(url, opciones) {
         } else {
             fetch(url, opciones)
                 .then(async (r) => {
-                    if (!r.ok) throw new Error(`Error ${r.status}: ${await r.text()}`);
+                    if (!r.ok) {
+                        const e = new Error(`Error ${r.status}: ${await r.text()}`);
+                        e.status = r.status;
+                        throw e;
+                    }
                     return r.json();
                 })
                 .then(resolve)

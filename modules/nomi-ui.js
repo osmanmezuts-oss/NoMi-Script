@@ -96,7 +96,7 @@ function crearVentanaChat() {
 
     win.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;color:#fff;flex-shrink:0;">
-            <div style="display:flex;align-items:center;gap:8px;"><b style="font-size:13px;color:#FF6B6B;">${NOMBRE_ASISTENTE}</b><span id="nomi-modelo-display" style="font-size:9px;color:#888;">${NoMiState.modeloActual}</span></div>
+            <div style="display:flex;align-items:center;gap:8px;"><b style="font-size:13px;color:#FF6B6B;">${NOMBRE_ASISTENTE}</b><span id="nomi-proveedor-display" style="font-size:9px;color:#36c5f0;font-weight:bold;"></span><span id="nomi-modelo-display" style="font-size:9px;color:#888;">${NoMiState.modeloActual}</span></div>
             <div><button id="nomi-web-btn" style="background:none;border:1px solid #555;border-radius:6px;padding:2px 8px;color:#888;font-size:12px;cursor:pointer;margin-right:4px;">🌐</button><button id="nomi-stats-btn" style="background:none;border:none;color:#888;font-size:14px;cursor:pointer;margin-right:4px;" title="Estadísticas">📊</button><button id="nomi-export-btn" style="background:none;border:none;color:#888;font-size:14px;cursor:pointer;margin-right:4px;" title="Exportar historial">📤</button><button id="nomi-menu-btn" style="background:none;border:1px solid #555;border-radius:6px;padding:2px 8px;color:#888;font-size:12px;cursor:pointer;margin-right:4px;">⚙️</button></div>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:9px;color:#555;flex-shrink:0;margin-bottom:4px;"><span id="nomi-contexto-indicador">📚 Contexto: ${NoMiState.contextoSeleccionado} mensajes</span><span id="nomi-web-status" style="display:none;color:#34a853;">🌐 Web activo</span></div>
@@ -189,8 +189,40 @@ function crearVentanaChat() {
     document.getElementById('nomi-export-btn').onclick = () => mostrarExportacion();
     document.getElementById('nomi-menu-btn').onclick = () => mostrarMenu();
 
+    document.getElementById('nomi-stats-btn').onclick = () => mostrarEstadisticas();
+    document.getElementById('nomi-export-btn').onclick = () => mostrarExportacion();
+    document.getElementById('nomi-menu-btn').onclick = () => mostrarMenu();
+
     actualizarContextoIndicador();
     actualizarStats();
     actualizarBarraUbicacion();
+}
+
+// ======== Indicador superior de proveedor y modelo ========
+// Actualiza un solo dato del DOM a la vez. Devuelve el elemento o null (los
+// stubs de los tests devuelven null para getElementById).
+function actualizarIndicadorProveedor() {
+    const el = document.getElementById('nomi-proveedor-display');
+    if (!el) return;
+    const esNoMi = NoMiState.modoAcceso === MODO_ACCESO_NOMI;
+    el.textContent = esNoMi ? PROVEEDOR_NOMI_LABEL : PROVEEDOR_OPENROUTER_LABEL;
+    el.style.color = esNoMi ? '#36c5f0' : '#f5a623';
+}
+
+// Actualiza el texto del modelo mostrado según el proveedor activo.
+function actualizarIndicadorModelo() {
+    const el = document.getElementById('nomi-modelo-display');
+    if (!el) return;
+    if (NoMiState.modoAcceso === MODO_ACCESO_NOMI) {
+        el.textContent = (NoMiState.nomiModelo || NOMI_MODELO_POR_DEFECTO);
+    } else {
+        el.textContent = NoMiState.modeloActual || MODELO_POR_DEFECTO;
+    }
+}
+
+// Actualiza proveedor + modelo en una sola llamada.
+function actualizarIndicador() {
+    actualizarIndicadorProveedor();
+    actualizarIndicadorModelo();
 }
 

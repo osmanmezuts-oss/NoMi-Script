@@ -22,7 +22,7 @@
 // ==UserScript==
 // @name         NoMi Asistente V5.8
 // @namespace    http://tampermonkey.net/
-// @version      5.15
+// @version      5.16
 // @description  Asistente IA con importación de credenciales, actualización automática y mejoras multiplataforma
 // @match        https://*/*
 // @grant        GM_xmlhttpRequest
@@ -31,6 +31,7 @@
 // @grant        GM_deleteValue
 // @grant        GM_registerMenuCommand
 // @connect      nomi-diagnostics.osmanmezuts.workers.dev
+// @connect      nomi-api-worker.osmanmezuts.workers.dev
 // @connect      openrouter.ai
 // @updateURL    https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/main/NoMi%20Asistente%20V5.8.user.js
 // @downloadURL  https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/main/NoMi%20Asistente%20V5.8.user.js
@@ -59,8 +60,8 @@ const ALTO_POR_DEFECTO = 400;
 const UBICACION_EXPIRACION = 3 * 60 * 60 * 1000;
 const CONTEXTO_RECIENTE = 10;
 const DIAS_LIMITE_HISTORIAL = 7;
-const VERSION_SCRIPT = '5.15';
-const FECHA_LANZAMIENTO = '21/06/2026';
+const VERSION_SCRIPT = '5.16';
+const FECHA_LANZAMIENTO = '19/08/2026';
 
 const STORAGE_VALIDADO = 'nomi_validado';
 const STORAGE_API_KEY = 'nomi_api_key';
@@ -89,6 +90,26 @@ const STORAGE_DIAGNOSTICO_AVISO = 'nomi_diagnostico_aviso_visto';
 
 // Endpoint del Worker de diagnóstico (envío de errores anónimo y mínimo).
 const DIAGNOSTICS_URL = 'https://nomi-diagnostics.osmanmezuts.workers.dev/v1/diagnostics';
+
+// ===== Acceso compartido NoMi (Worker de Cloudflare) =====
+// Modo de acceso explícito que usa el Worker en lugar de OpenRouter/Tavily directo.
+// SOLO se guardan la URL pública del Worker y el token opaco de instalación.
+// NUNCA se incluyen ni leen GROQ_API_KEY, ADMIN_SECRET ni ACCESS_TOKEN_SECRET.
+const MODO_ACCESO_OPENROUTER = 'openrouter';
+const MODO_ACCESO_NOMI = 'nomi';
+const MODO_ACCESO_POR_DEFECTO = MODO_ACCESO_OPENROUTER;
+const NOMI_WORKER_URL_POR_DEFECTO = 'https://nomi-api-worker.osmanmezuts.workers.dev';
+const NOMI_MODELO_POR_DEFECTO = 'openai/gpt-oss-20b';
+// Etiquetas legibles del proveedor activo para el indicador superior.
+const PROVEEDOR_NOMI_LABEL = 'NoMi Worker / Groq';
+const PROVEEDOR_OPENROUTER_LABEL = 'OpenRouter';
+const NOMI_PERSONA_SISTEMA = 'Eres NoMi, un asistente profesional y formal pero cercano. Responde con claridad, respeto y precisión. Evita el tuteo excesivo y mantén un tono de colaboración entre iguales. El usuario espera respuestas útiles, concisas y bien estructuradas.';
+
+const STORAGE_MODO_ACCESO = 'nomi_modo_acceso';
+const STORAGE_NOMI_WORKER_URL = 'nomi_worker_url';
+const STORAGE_NOMI_TOKEN = 'nomi_token';
+const STORAGE_NOMI_MODELO = 'nomi_modelo_nomi';
+const STORAGE_NOMI_ACCESO_ACTIVO = 'nomi_acceso_activo';
 
 // ======== MODULO: nomi-deteccion-sistema.js (bundle) ========
 // ======== MÓDULO: Detección de Sistema ========
@@ -306,7 +327,12 @@ window.NoMiState = {
     motorBusqueda: 'tavily',
     diagnosticoActivo: true,
     instalacionId: '',
-    avisoDiagnosticoVisto: false
+    avisoDiagnosticoVisto: false,
+    modoAcceso: MODO_ACCESO_OPENROUTER,
+    nomiWorkerUrl: NOMI_WORKER_URL_POR_DEFECTO,
+    nomiToken: '',
+    nomiModelo: NOMI_MODELO_POR_DEFECTO,
+    nomiAccesoActivo: false
 };
 
 // ======== MODULO: nomi-utilities.js (bundle) ========
@@ -551,6 +577,19 @@ function getDiagnosticoActivo() { const v = getValor(STORAGE_DIAGNOSTICO_ACTIVO,
 function setDiagnosticoActivo(activo) { setValor(STORAGE_DIAGNOSTICO_ACTIVO, !!activo); NoMiState.diagnosticoActivo = !!activo; }
 function getAvisoDiagnosticoVisto() { return getValor(STORAGE_DIAGNOSTICO_AVISO, false); }
 function setAvisoDiagnosticoVisto(visto) { setValor(STORAGE_DIAGNOSTICO_AVISO, !!visto); NoMiState.avisoDiagnosticoVisto = !!visto; }
+
+// ===== Acceso compartido NoMi (Worker) =====
+// Se guarda únicamente la URL pública del Worker y el token opaco de instalación.
+function getModoAcceso() { return getValor(STORAGE_MODO_ACCESO, MODO_ACCESO_POR_DEFECTO); }
+function setModoAcceso(m) { setValor(STORAGE_MODO_ACCESO, m); NoMiState.modoAcceso = m; }
+function getNomiWorkerUrl() { return getValor(STORAGE_NOMI_WORKER_URL, NOMI_WORKER_URL_POR_DEFECTO); }
+function setNomiWorkerUrl(u) { setValor(STORAGE_NOMI_WORKER_URL, u); NoMiState.nomiWorkerUrl = u; }
+function getNomiToken() { return getValor(STORAGE_NOMI_TOKEN, ''); }
+function setNomiToken(t) { setValor(STORAGE_NOMI_TOKEN, t); NoMiState.nomiToken = t; }
+function getNomiModelo() { return getValor(STORAGE_NOMI_MODELO, NOMI_MODELO_POR_DEFECTO); }
+function setNomiModelo(m) { setValor(STORAGE_NOMI_MODELO, m); NoMiState.nomiModelo = m; }
+function getNomiAccesoActivo() { return getValor(STORAGE_NOMI_ACCESO_ACTIVO, false); }
+function setNomiAccesoActivo(v) { setValor(STORAGE_NOMI_ACCESO_ACTIVO, !!v); NoMiState.nomiAccesoActivo = !!v; }
 // ID aleatorio persistente por instalación (se genera una sola vez y se guarda).
 // Se usa criptografía segura (crypto.randomUUID / crypto.getRandomValues).
 // Si no hay Web Crypto disponible, se retorna null para Omitir el diagnóstico;
@@ -991,7 +1030,9 @@ function hacerPeticion(url, opciones) {
                         try { resolve(JSON.parse(resp.responseText)); }
                         catch (e) { resolve(resp.responseText); }
                     } else {
-                        reject(new Error(`Error ${resp.status}: ${resp.responseText}`));
+                        const e = new Error(`Error ${resp.status}: ${resp.responseText}`);
+                        e.status = resp.status;
+                        reject(e);
                     }
                 },
                 onerror: (err) => {
@@ -1007,7 +1048,11 @@ function hacerPeticion(url, opciones) {
         } else {
             fetch(url, opciones)
                 .then(async (r) => {
-                    if (!r.ok) throw new Error(`Error ${r.status}: ${await r.text()}`);
+                    if (!r.ok) {
+                        const e = new Error(`Error ${r.status}: ${await r.text()}`);
+                        e.status = r.status;
+                        throw e;
+                    }
                     return r.json();
                 })
                 .then(resolve)
@@ -1058,6 +1103,270 @@ async function llamarIA(mensaje) {
         registrarError('api', error.message, `Modelo: ${NoMiState.modeloActual}, URL: ${NoMiState.urlBaseActual}`);
         throw error;
     }
+}
+
+// ======== MODULO: nomi-acceso-nomi.js (bundle) ========
+// ======== MÓDULO: Acceso compartido NoMi (Worker) ========
+// NoMi Assistant – Integración con el Worker de Cloudflare (modo explícito).
+//
+// Seguridad:
+//   - El endpoint del Worker es FIJO (NOMI_WORKER_URL_POR_DEFECTO). Nunca se
+//     usa una URL controlada por el usuario para hacer peticiones.
+//   - SOLO se guardan la URL pública por defecto y el token opaco de instalación.
+//   - NUNCA se incluyen ni leen las claves secretas del Worker (API key de Groq,
+//     secreto de administración ni secreto de firma de tokens).
+//   - El token se envía como Bearer solo en POST /v1/chat. GET /v1/catalog es
+//     público y NO lleva Authorization.
+//   - Ante 401 se indica token inválido/revocado y NO se hace fallback a OpenRouter.
+//
+// Compatibilidad: reutiliza hacerPeticion (GM_xmlhttpRequest + fetch) para
+// funcionar en Violentmonkey y Tampermonkey sin dependencias extra.
+
+// Error específico de token inválido/revocado del Worker.
+class NoMiTokenInvalidoError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'NoMiTokenInvalidoError';
+    }
+}
+
+// Devuelve SIEMPRE la URL fija del Worker. No se usa ninguna URL de usuario.
+function nomiWorkerBase() {
+    return NOMI_WORKER_URL_POR_DEFECTO;
+}
+
+// Resetea cualquier URL persistida distinta a la oficial (seguridad: evita
+// que un valor antiguamente editable quede activo).
+function resetearUrlWorkerNoMi() {
+    if (getNomiWorkerUrl() !== NOMI_WORKER_URL_POR_DEFECTO) {
+        setNomiWorkerUrl(NOMI_WORKER_URL_POR_DEFECTO);
+    }
+}
+
+// Indica si el modo NoMi puede usarse ahora (modo activo, token y acceso vigente).
+function puedeUsarAccesoNoMi() {
+    return NoMiState.modoAcceso === MODO_ACCESO_NOMI
+        && !!NoMiState.nomiToken
+        && NoMiState.nomiAccesoActivo === true;
+}
+
+// Estado legible del acceso compartido NoMi.
+function estadoAccesoNoMi() {
+    if (NoMiState.modoAcceso !== MODO_ACCESO_NOMI) return 'desactivado';
+    if (!NoMiState.nomiToken) return 'pendiente';
+    return NoMiState.nomiAccesoActivo ? 'activo' : 'revocado';
+}
+
+// Longitud en bytes UTF-8 de una cadena.
+function byteLengthUTF8(s) {
+    return new TextEncoder().encode(s).length;
+}
+
+// Recorta una cadena para que ocupe como máximo maxBytes bytes UTF-8,
+// sin cortar en medio de un carácter multibyte.
+function recortarUTF8Seguro(s, maxBytes) {
+    if (maxBytes <= 0) return '';
+    const bytes = new TextEncoder().encode(s);
+    if (bytes.length <= maxBytes) return s;
+    let end = maxBytes;
+    while (end > 0 && (bytes[end] & 0xC0) === 0x80) end--; // retrocede bytes de continuación
+    return new TextDecoder('utf-8', { fatal: false }).decode(bytes.subarray(0, end));
+}
+
+// Construye el mensaje único para /v1/chat preservando continuidad y respetando
+// siempre <=6000 bytes UTF-8 (contando persona, contexto, resumen, historial y
+// TODOS los separadores, incluido el previo al historial).
+//
+// Estrategia de recorte (el bloque final "Pregunta del usuario" se preserva):
+//   1) Se separa la pregunta final del contexto (fecha/ubicación/contenido de página).
+//   2) Se RESERVA espacio para el bloque final de pregunta (con su separador).
+//      Si la pregunta por sí sola supera el límite, se recorta UTF-8 de forma
+//      segura e se indica claramente.
+//   3) El contexto (fecha/ubicación/página) se recorta ANTES que la pregunta.
+//   4) Resumen e historial solo se añaden si caben en el presupuesto restante.
+// No altera el contrato del Worker.
+function construirMensajeWorkerNoMi(promptActual) {
+    const separador = '\n\n';
+    const maxBytes = 6000;
+    const persona = NOMI_PERSONA_SISTEMA;
+    const indicadorRecorte = '[pregunta recortada por límite de tamaño]';
+
+    // Separar la pregunta final del contexto (fecha/ubicación/contenido de página).
+    let contexto = String(promptActual || '');
+    let pregunta = contexto;
+    const idx = contexto.lastIndexOf('Pregunta del usuario:');
+    if (idx !== -1) {
+        pregunta = contexto.slice(idx);
+        contexto = contexto.slice(0, idx);
+    }
+
+    // Reservar el bloque final de pregunta; si solo él excede, recortarlo UTF-8
+    // seguro e indicarlo claramente (el indicador también se reserva, sin separador extra).
+    let cola = pregunta;
+    if (byteLengthUTF8(persona + separador + cola) > maxBytes) {
+        const disponible = maxBytes - byteLengthUTF8(persona + separador) - byteLengthUTF8(indicadorRecorte) - 1;
+        cola = recortarUTF8Seguro(pregunta, disponible) + indicadorRecorte;
+    }
+
+    // Presupuesto para la cabecera (persona + contexto + resumen + historial),
+    // reservando el separador y bloque final de pregunta.
+    let headBudget = maxBytes - byteLengthUTF8(persona) - byteLengthUTF8(separador + cola);
+    let head = persona;
+
+    // 1) Contexto (fecha/ubicación/página) — se recorta ANTES que la pregunta.
+    if (headBudget > 0 && contexto.trim().length > 0) {
+        const bloque = separador + contexto.trim();
+        if (byteLengthUTF8(bloque) <= headBudget) {
+            head += bloque;
+            headBudget -= byteLengthUTF8(bloque);
+        } else if (headBudget > byteLengthUTF8(separador) + 1) {
+            head += separador + recortarUTF8Seguro(contexto.trim(), headBudget - byteLengthUTF8(separador) - 1);
+            headBudget = 0;
+        }
+    }
+
+    // 2) Resumen (si cabe en el presupuesto restante).
+    if (headBudget > 0 && NoMiState.modoResumenActivo && NoMiState.contextoSeleccionado === 10 && NoMiState.resumenPersistente) {
+        const head2 = separador + 'Resumen de la conversación anterior:\n';
+        const bloque = head2 + NoMiState.resumenPersistente;
+        if (byteLengthUTF8(bloque) <= headBudget) {
+            head += bloque;
+            headBudget -= byteLengthUTF8(bloque);
+        } else if (headBudget > byteLengthUTF8(head2) + 1) {
+            head += head2 + recortarUTF8Seguro(NoMiState.resumenPersistente, headBudget - byteLengthUTF8(head2) - 1);
+            headBudget = 0;
+        }
+    }
+
+    // 3) Historial reciente (del más reciente al más antiguo) mientras quepa.
+    if (headBudget > 0) {
+        const limite = Math.min(NoMiState.contextoSeleccionado, CONTEXTO_RECIENTE);
+        const recientes = NoMiState.historial
+            .filter(m => m && (m.role === 'user' || m.role === 'assistant'))
+            .slice(-limite);
+        const secciones = [];
+        for (let i = recientes.length - 1; i >= 0; i--) {
+            const rol = recientes[i].role === 'user' ? 'Usuario' : 'Asistente';
+            const sec = (secciones.length === 0 ? 'Historial reciente (del más reciente al más antiguo):\n' : '') + rol + ': ' + recientes[i].content;
+            // El separador inicial (\n\n) antes de "Historial reciente..." se descuenta
+            // aquí para que el presupuesto coincida exactamente con lo concatenado.
+            const bloque = (secciones.length ? '\n' : separador) + sec;
+            if (byteLengthUTF8(bloque) > headBudget) break;
+            secciones.push(sec);
+            headBudget -= byteLengthUTF8(bloque);
+        }
+        if (secciones.length) {
+            head += separador + secciones.slice().reverse().join('\n');
+        }
+    }
+
+    return head + separador + cola;
+}
+
+// Construye el prompt de resumen para /v1/chat: instrucción compacta + historial
+// recortado para respetar <=6000 bytes UTF-8. Conserva la instrucción.
+function construirMensajeResumenNoMi(historialCompleto) {
+    const separador = '\n\n';
+    const maxBytes = 6000;
+    const instruccion = 'Eres un asistente que resume conversaciones. Genera un resumen COMPACTO (máximo 300 palabras) de toda la conversación. Incluye temas principales y decisiones. Responde SOLO con el resumen.';
+    const texto = (historialCompleto || [])
+        .map(m => (m.role === 'user' ? 'Usuario' : 'Asistente') + ': ' + (m.content || ''))
+        .join('\n');
+    const head = instruccion + separador + 'Resume esta conversación:\n';
+    let prompt = head + texto;
+    if (byteLengthUTF8(prompt) > maxBytes) {
+        prompt = head + recortarUTF8Seguro(texto, maxBytes - byteLengthUTF8(head) - 1);
+    }
+    return prompt;
+}
+
+// Activa el acceso: canjea el código de invitación y guarda el token opaco.
+// Devuelve el token en éxito; lanza Error descriptivo en fallo (sin guardar token).
+async function activarAccesoNoMi(codigo) {
+    resetearUrlWorkerNoMi();
+    const base = nomiWorkerBase();
+    const cuerpo = JSON.stringify({ codigo: String(codigo || '').trim().toUpperCase() });
+    let datos;
+    try {
+        datos = await hacerPeticion(base + '/v1/activate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: cuerpo
+        });
+    } catch (err) {
+        throw new Error(mapearErrorActivacion(err));
+    }
+    if (!datos || !datos.token) {
+        throw new Error('El servidor NoMi no devolvió un token de instalación.');
+    }
+    setNomiWorkerUrl(NOMI_WORKER_URL_POR_DEFECTO);
+    setNomiToken(datos.token);
+    setNomiAccesoActivo(true);
+    // Intenta obtener el catálogo para fijar un modelo groq activo por defecto.
+    try {
+        const cat = await obtenerCatalogoNoMi();
+        const m = (cat && cat.modelos || []).find(x => x && x.proveedor === 'groq' && x.estado === 'activo');
+        if (m && m.id) setNomiModelo(m.id);
+    } catch (_) { /* el catálogo es opcional para la activación */ }
+    return datos.token;
+}
+
+// Convierte errores HTTP de activación en mensajes claros para el usuario.
+function mapearErrorActivacion(err) {
+    const status = err && typeof err.status === 'number' ? err.status : null;
+    if (status === 400) return 'Código de invitación inválido o ya usado.';
+    if (status === 503) return 'Capacidad de NoMi temporalmente llena. Intenta de nuevo más tarde.';
+    if (status === 401) return 'No autorizado por el servidor NoMi.';
+    return (err && err.message) ? err.message : 'No se pudo activar el acceso NoMi.';
+}
+
+// Obtiene el catálogo PÚBLICO de modelos del Worker (sin Authorization).
+async function obtenerCatalogoNoMi() {
+    const base = nomiWorkerBase();
+    return await hacerPeticion(base + '/v1/catalog', {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' }
+    });
+}
+
+// Llama al chat del Worker. Devuelve el texto de la respuesta.
+// Ante 401 marca el acceso como revocado y lanza NoMiTokenInvalidoError (sin fallback).
+async function llamarIANoMi(mensaje, maxTokens) {
+    if (!NoMiState.nomiToken) {
+        throw new NoMiTokenInvalidoError('No hay token de acceso NoMi. Actívalo con un código de invitación en ⚙️ Configuración.');
+    }
+    const base = nomiWorkerBase();
+    try {
+        const datos = await hacerPeticion(base + '/v1/chat', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + NoMiState.nomiToken
+            },
+            body: JSON.stringify({
+                modelo: NoMiState.nomiModelo || NOMI_MODELO_POR_DEFECTO,
+                mensaje: String(mensaje || '')
+            })
+        });
+        if (datos && typeof datos.respuesta === 'string') return datos.respuesta;
+        throw new Error((datos && datos.error && datos.error.message) || 'Respuesta inesperada del Worker NoMi.');
+    } catch (err) {
+        const status = err && typeof err.status === 'number' ? err.status : null;
+        const es401 = status === 401 || (err && err.message && /401/.test(err.message)) || (err instanceof NoMiTokenInvalidoError);
+        if (es401) {
+            setNomiAccesoActivo(false);
+            throw new NoMiTokenInvalidoError('Tu token de acceso NoMi es inválido o fue revocado. Vuelve a activarlo en ⚙️ Configuración.');
+        }
+        throw err;
+    }
+}
+
+// Cierra el acceso compartido NoMi en ESTE NAVEGADOR: borra el token local.
+// NO revoca el token en el servidor (eso lo hace el administrador).
+function cerrarAccesoNoMi() {
+    setNomiToken('');
+    setNomiAccesoActivo(false);
+    mostrarNotificacionTemporal('🔌 Acceso compartido NoMi cerrado en este navegador (el token sigue activo en el servidor hasta que un administrador lo revoque).');
 }
 
 // ======== MODULO: nomi-modelos-free.js (bundle) ========
@@ -1621,7 +1930,7 @@ function crearVentanaChat() {
 
     win.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;color:#fff;flex-shrink:0;">
-            <div style="display:flex;align-items:center;gap:8px;"><b style="font-size:13px;color:#FF6B6B;">${NOMBRE_ASISTENTE}</b><span id="nomi-modelo-display" style="font-size:9px;color:#888;">${NoMiState.modeloActual}</span></div>
+            <div style="display:flex;align-items:center;gap:8px;"><b style="font-size:13px;color:#FF6B6B;">${NOMBRE_ASISTENTE}</b><span id="nomi-proveedor-display" style="font-size:9px;color:#36c5f0;font-weight:bold;"></span><span id="nomi-modelo-display" style="font-size:9px;color:#888;">${NoMiState.modeloActual}</span></div>
             <div><button id="nomi-web-btn" style="background:none;border:1px solid #555;border-radius:6px;padding:2px 8px;color:#888;font-size:12px;cursor:pointer;margin-right:4px;">🌐</button><button id="nomi-stats-btn" style="background:none;border:none;color:#888;font-size:14px;cursor:pointer;margin-right:4px;" title="Estadísticas">📊</button><button id="nomi-export-btn" style="background:none;border:none;color:#888;font-size:14px;cursor:pointer;margin-right:4px;" title="Exportar historial">📤</button><button id="nomi-menu-btn" style="background:none;border:1px solid #555;border-radius:6px;padding:2px 8px;color:#888;font-size:12px;cursor:pointer;margin-right:4px;">⚙️</button></div>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:9px;color:#555;flex-shrink:0;margin-bottom:4px;"><span id="nomi-contexto-indicador">📚 Contexto: ${NoMiState.contextoSeleccionado} mensajes</span><span id="nomi-web-status" style="display:none;color:#34a853;">🌐 Web activo</span></div>
@@ -1714,9 +2023,41 @@ function crearVentanaChat() {
     document.getElementById('nomi-export-btn').onclick = () => mostrarExportacion();
     document.getElementById('nomi-menu-btn').onclick = () => mostrarMenu();
 
+    document.getElementById('nomi-stats-btn').onclick = () => mostrarEstadisticas();
+    document.getElementById('nomi-export-btn').onclick = () => mostrarExportacion();
+    document.getElementById('nomi-menu-btn').onclick = () => mostrarMenu();
+
     actualizarContextoIndicador();
     actualizarStats();
     actualizarBarraUbicacion();
+}
+
+// ======== Indicador superior de proveedor y modelo ========
+// Actualiza un solo dato del DOM a la vez. Devuelve el elemento o null (los
+// stubs de los tests devuelven null para getElementById).
+function actualizarIndicadorProveedor() {
+    const el = document.getElementById('nomi-proveedor-display');
+    if (!el) return;
+    const esNoMi = NoMiState.modoAcceso === MODO_ACCESO_NOMI;
+    el.textContent = esNoMi ? PROVEEDOR_NOMI_LABEL : PROVEEDOR_OPENROUTER_LABEL;
+    el.style.color = esNoMi ? '#36c5f0' : '#f5a623';
+}
+
+// Actualiza el texto del modelo mostrado según el proveedor activo.
+function actualizarIndicadorModelo() {
+    const el = document.getElementById('nomi-modelo-display');
+    if (!el) return;
+    if (NoMiState.modoAcceso === MODO_ACCESO_NOMI) {
+        el.textContent = (NoMiState.nomiModelo || NOMI_MODELO_POR_DEFECTO);
+    } else {
+        el.textContent = NoMiState.modeloActual || MODELO_POR_DEFECTO;
+    }
+}
+
+// Actualiza proveedor + modelo en una sola llamada.
+function actualizarIndicador() {
+    actualizarIndicadorProveedor();
+    actualizarIndicadorModelo();
 }
 
 // ======== MODULO: nomi-asistente-config.js (bundle) ========
@@ -1880,8 +2221,9 @@ function mostrarMenu() {
         <h2 style="color:#FF6B6B;margin-top:0;">⚙️ Configuración</h2>
         <div style="margin:10px 0;">
             <div style="margin-bottom:8px;font-size:11px;color:#555;">💾 Espacio ocupado: <span style="color:#888;">${espacioFormateado}</span>${logs.length > 0 ? ` | 📋 Errores: <span style="color:#f55036;">${logs.length}</span>` : ''}${credCargadas ? ' | ✅ Credenciales cargadas' : ' | ❌ Credenciales no configuradas'}</div>
-            <div style="margin-bottom:16px;padding:12px;background:#0d0d1a;border-radius:12px;border:1px solid #333;">
+            <div id="nomi-seccion-openrouter" style="margin-bottom:16px;padding:12px;background:#0d0d1a;border-radius:12px;border:1px solid #333;${NoMiState.modoAcceso === 'nomi' ? 'opacity:0.5;pointer-events:none;' : ''}">
                 <h3 style="color:#4a6cf7;margin:0 0 8px 0;font-size:14px;">🔑 Credenciales</h3>
+                ${NoMiState.modoAcceso === 'nomi' ? '<div style="font-size:10px;color:#f5a623;margin-bottom:6px;font-weight:bold;">Solo disponible en modo OpenRouter. Cambia el modo de acceso para usarlas.</div>' : ''}
                 <div style="margin-bottom:8px;"><label style="font-size:12px;color:#888;display:block;margin-bottom:2px;">OpenRouter API Key</label><input type="password" id="nomi-input-openrouter" value="${apiKeyActual}" style="width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;"></div>
                 <div style="margin-bottom:8px;"><label style="font-size:12px;color:#888;display:block;margin-bottom:2px;">Tavily API Key</label><input type="password" id="nomi-input-tavily" value="${tavilyKeyActual}" style="width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;"><div style="font-size:9px;color:#555;margin-top:2px;">Si no tienes, obtén una gratis en tavily.com</div></div>
                                 <div style="margin-bottom:8px;">
@@ -1902,6 +2244,24 @@ function mostrarMenu() {
                 <h3 style="color:#36c5f0;margin:0 0 8px 0;font-size:14px;">🩺 Diagnóstico técnico</h3>
                 <label style="display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:6px;"><span>Enviar diagnóstico de errores</span><input type="checkbox" id="nomi-check-diagnostico" ${diagnosticoActivo ? 'checked' : ''}></label>
                 <div style="font-size:10px;color:#888;margin-top:4px;">Solo errores y contexto técnico (dispositivo, red, batería). Nunca se envían claves, chats, ubicación ni URL completa.</div>
+            </div>
+            <div style="margin-bottom:16px;padding:12px;background:#0d0d1a;border-radius:12px;border:1px solid #333;">
+                <h3 style="color:#b06bff;margin:0 0 8px 0;font-size:14px;">🌐 Acceso compartido NoMi</h3>
+                <div style="font-size:11px;color:#888;margin-bottom:8px;">Modo de conexión a la IA. El modo predeterminado es OpenRouter + Tavily (sin cambios).</div>
+                <label style="font-size:12px;color:#888;display:block;margin-bottom:2px;">Modo de acceso</label>
+                <select id="nomi-select-modo" style="width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;">
+                    <option value="openrouter" ${NoMiState.modoAcceso === 'openrouter' ? 'selected' : ''}>OpenRouter + Tavily (predeterminado)</option>
+                    <option value="nomi" ${NoMiState.modoAcceso === 'nomi' ? 'selected' : ''}>Acceso compartido NoMi (Worker)</option>
+                </select>
+                <div id="nomi-seccion-worker" style="display:${NoMiState.modoAcceso === 'nomi' ? 'block' : 'none'};margin-top:8px;">
+                    <div style="font-size:11px;color:#aaa;margin-bottom:4px;">Estado: <span id="nomi-estado-acceso">${estadoAccesoNoMi() === 'activo' ? '✅ Activo' : estadoAccesoNoMi() === 'revocado' ? '⛔ Revocado/inválido' : estadoAccesoNoMi() === 'pendiente' ? '⏳ Pendiente de activación' : 'Desactivado'}</span></div>
+                    <div style="font-size:10px;color:#666;margin-bottom:6px;">Worker: <span style="color:#888;">${NOMI_WORKER_URL_POR_DEFECTO}</span> (fijo, no editable)</div>
+                    <div style="margin-bottom:6px;"><label style="font-size:11px;color:#888;display:block;margin-bottom:2px;">Código de invitación</label><input type="text" id="nomi-input-codigo" placeholder="XXXX-XXXX" style="width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;"></div>
+                    <button id="nomi-activar-acceso" style="width:100%;padding:8px;background:#b06bff;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;margin-bottom:6px;">🔑 Activar con código</button>
+                    <div style="margin-bottom:6px;"><label style="font-size:11px;color:#888;display:block;margin-bottom:2px;">Modelo NoMi</label><select id="nomi-select-modelo-nomi" style="width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;"><option value="${getNomiModelo() || NOMI_MODELO_POR_DEFECTO}">${getNomiModelo() || NOMI_MODELO_POR_DEFECTO}</option></select><div style="display:flex;gap:4px;align-items:center;margin-top:4px;"><button id="nomi-actualizar-modelos-nomi" style="flex:1;padding:4px 6px;background:#3a4a6a;border:none;border-radius:6px;color:#fff;font-size:10px;cursor:pointer;">Cargar modelos</button><span id="nomi-estado-modelo-nomi" style="font-size:9px;color:#aaa;"></span></div></div>
+                    <div style="font-size:10px;color:#555;margin-top:2px;">Solo se guardan la URL pública (fija) y el token opaco. Nunca se guardan claves del Worker.</div>
+                    <button id="nomi-cerrar-acceso-nomi" style="width:100%;padding:6px;background:#f55036;border:none;border-radius:8px;color:#fff;font-size:11px;cursor:pointer;margin-top:6px;">🗑️ Cerrar acceso (borra el token de este navegador)</button>
+                </div>
             </div>
             <div style="margin-bottom:12px;"><label style="display:flex;justify-content:space-between;align-items:center;font-size:14px;"><span>📍 Ubicación</span><input type="checkbox" id="nomi-check-ubicacion" ${NoMiState.ubicacionActivada ? 'checked' : ''}></label><div style="font-size:11px;color:#888;">Permite a NoMi conocer su ubicación para respuestas más precisas (clima, eventos, etc.).</div></div>
             <div style="margin-bottom:12px;"><label style="display:flex;justify-content:space-between;align-items:center;font-size:14px;"><span>🌿 Modo Ligero</span><input type="checkbox" id="nomi-check-ligero" ${NoMiState.modoLigeroActivo ? 'checked' : ''}></label><div style="font-size:11px;color:#888;">Reduce el texto extraído de páginas a 500 caracteres.</div></div>
@@ -1957,6 +2317,76 @@ function mostrarMenu() {
         menu.remove();
         mostrarNotificacionTemporal(`🩺 Diagnóstico técnico ${NoMiState.diagnosticoActivo ? 'activado' : 'desactivado'}.`);
     };
+
+    // ---- Acceso compartido NoMi (Worker) ----
+    // Alterna la sección OpenRouter (credenciales/modelo/URL) según el modo:
+    // en modo NoMi se deshabilita visual y funcionalmente con el texto indicado.
+    const alternarSeccionOpenRouter = () => {
+        const sec = document.getElementById('nomi-seccion-openrouter');
+        if (!sec) return;
+        const esNoMi = NoMiState.modoAcceso === MODO_ACCESO_NOMI;
+        sec.style.opacity = esNoMi ? '0.5' : '1';
+        sec.style.pointerEvents = esNoMi ? 'none' : 'auto';
+        // Añade/quita el aviso "Solo disponible en modo OpenRouter".
+        let aviso = sec.querySelector('.nomi-openrouter-aviso');
+        const texto = 'Solo disponible en modo OpenRouter. Cambia el modo de acceso para usarlas.';
+        if (esNoMi) {
+            if (!aviso) {
+                aviso = document.createElement('div');
+                aviso.className = 'nomi-openrouter-aviso';
+                aviso.style.cssText = 'font-size:10px;color:#f5a623;margin-bottom:6px;font-weight:bold;';
+                sec.insertBefore(aviso, sec.firstChild.nextSibling);
+            }
+            aviso.textContent = texto;
+        } else if (aviso) {
+            aviso.remove();
+        }
+    };
+    const selModoNoMi = document.getElementById('nomi-select-modo');
+    if (selModoNoMi) selModoNoMi.onchange = (e) => {
+        const m = e.target.value;
+        setModoAcceso(m);
+        const sec = document.getElementById('nomi-seccion-worker');
+        if (sec) sec.style.display = m === 'nomi' ? 'block' : 'none';
+        alternarSeccionOpenRouter();
+        actualizarIndicador();
+        mostrarNotificacionTemporal(`🌐 Modo de acceso: ${m === 'nomi' ? 'Acceso compartido NoMi' : 'OpenRouter + Tavily'}`);
+    };
+    const activarNoMiBtn = document.getElementById('nomi-activar-acceso');
+    if (activarNoMiBtn) activarNoMiBtn.onclick = async () => {
+        const codigo = document.getElementById('nomi-input-codigo').value.trim();
+        if (!codigo) { mostrarNotificacionTemporal('❌ Introduce el código de invitación.'); return; }
+        activarNoMiBtn.disabled = true;
+        activarNoMiBtn.textContent = '⏳ Activando…';
+        try {
+            await activarAccesoNoMi(codigo);
+            setModoAcceso(MODO_ACCESO_NOMI);
+            const sel = document.getElementById('nomi-select-modo');
+            if (sel) sel.value = 'nomi';
+            const sec = document.getElementById('nomi-seccion-worker');
+            if (sec) sec.style.display = 'block';
+            alternarSeccionOpenRouter();
+            actualizarIndicador();
+            const est = document.getElementById('nomi-estado-acceso');
+            if (est) est.textContent = '✅ Activo';
+            mostrarNotificacionTemporal('✅ Acceso NoMi activado. Ya puedes chatear.');
+            cargarModelosNoMiAlMenu();
+        } catch (err) {
+            mostrarNotificacionTemporal('❌ ' + err.message);
+        } finally {
+            activarNoMiBtn.disabled = false;
+            activarNoMiBtn.textContent = '🔑 Activar con código';
+        }
+    };
+    const cerrarNoMiBtn = document.getElementById('nomi-cerrar-acceso-nomi');
+    if (cerrarNoMiBtn) cerrarNoMiBtn.onclick = () => {
+        cerrarAccesoNoMi();
+        const est = document.getElementById('nomi-estado-acceso');
+        if (est) est.textContent = '⏳ Pendiente de activación';
+    };
+    const actualizarNoMiModelos = document.getElementById('nomi-actualizar-modelos-nomi');
+    if (actualizarNoMiModelos) actualizarNoMiModelos.onclick = () => cargarModelosNoMiAlMenu();
+    if (getNomiToken()) cargarModelosNoMiAlMenu();
     document.getElementById('nomi-select-motor').onchange = (e) => {
         NoMiState.motorBusqueda = e.target.value;
         setMotorBusqueda(NoMiState.motorBusqueda);
@@ -2143,6 +2573,35 @@ async function cargarModelosAlMenu(force) {
     select.disabled = false;
 }
 
+// ---- Selector de modelos del catálogo NoMi (Worker) ----
+// Puebla el <select id="nomi-select-modelo-nomi"> con los modelos groq activos
+// del catálogo público. Conserva el modelo actual si no aparece.
+async function cargarModelosNoMiAlMenu() {
+    const select = document.getElementById('nomi-select-modelo-nomi');
+    const estado = document.getElementById('nomi-estado-modelo-nomi');
+    if (!select) return;
+    if (estado) estado.textContent = 'Cargando…';
+    try {
+        const cat = await obtenerCatalogoNoMi();
+        const lista = (cat && cat.modelos || []).filter(m => m && m.proveedor === 'groq' && m.estado === 'activo');
+        const actual = getNomiModelo() || NOMI_MODELO_POR_DEFECTO;
+        select.innerHTML = '';
+        lista.forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = m.id;
+            opt.textContent = `${m.nombre || m.id} | ${m.id}`;
+            if (m.id === actual) opt.selected = true;
+            select.appendChild(opt);
+        });
+        select.onchange = () => { setNomiModelo(select.value); actualizarIndicador(); };
+        if (estado) estado.textContent = `${lista.length} modelos`;
+    } catch (e) {
+        if (estado) estado.textContent = 'No se pudo cargar el catálogo.';
+        const actual = getNomiModelo() || NOMI_MODELO_POR_DEFECTO;
+        select.innerHTML = `<option value="${actual}">${actual}</option>`;
+    }
+}
+
 // ======== MODULO: nomi-core.js (bundle) ========
 // ======== MÓDULO: Núcleo Lógico (Orquestación) ========
 // NoMi Assistant – Funciones principales de orquestación
@@ -2179,7 +2638,9 @@ async function procesarBusqueda(consulta) {
         }
         const resultadosTexto = resultados.results.map((r, i) => `${i+1}. ${r.title || 'Sin título'}\n   ${r.content || 'Sin descripción'}`).join('\n\n');
         const prompt = `El usuario se encuentra en ${ubicacionTexto} (coordenadas GPS: ${ubicacionCoordenadas}). **DEBES usar ESTA ubicación para todas las consultas de clima y eventos locales.** Ignora cualquier otra ubicación que puedas inferir de la IP.\n\nInvestigué en la web sobre: "${consultaFinal}". Estos son los resultados obtenidos:\n\n${resultadosTexto}\n\nPor favor, ofrezca una respuesta clara, concisa y en un tono profesional pero cercano. Evite el uso excesivo de tablas o datos innecesarios. Resume la información más importante en 2-3 párrafos. Si hay datos numéricos (temperatura, precios, etc.), menciónelos de forma fluida dentro de la conversación. Mantenga un tono de colaboración entre iguales, sin tuteo excesivo.`;
-        const respuestaIA = await llamarIA(prompt);
+        const respuestaIA = NoMiState.modoAcceso === MODO_ACCESO_NOMI
+            ? await llamarIANoMi(prompt)
+            : await llamarIA(prompt);
         const respuestaConIndicador = `🔍 ${respuestaIA}`;
         NoMiState.historial.push({role: 'assistant', content: respuestaConIndicador});
         guardarHistorial(NoMiState.historial);
@@ -2190,6 +2651,15 @@ async function procesarBusqueda(consulta) {
         guardarHistorial(NoMiState.historial);
         agregarMensaje('bot', msg);
     }
+}
+
+// Decide si debe abrirse el asistente de configuración inicial.
+// En modo NoMi con token activo NO se exige OpenRouter/Tavily ni se abre el asistente.
+function debeMostrarConfiguracionInicial() {
+    if (NoMiState.modoAcceso === MODO_ACCESO_NOMI && NoMiState.nomiToken && NoMiState.nomiAccesoActivo) {
+        return false;
+    }
+    return !NoMiState.configuracionInicialCompletada || !NoMiState.credencialesCargadas;
 }
 
 function iniciarAsistente() {
@@ -2209,9 +2679,18 @@ function iniciarAsistente() {
     NoMiState.tavilyKeyActual = getTavilyKey();
     NoMiState.configuracionInicialCompletada = getConfigInicial();
     NoMiState.motorBusqueda = getMotorBusqueda();
+    NoMiState.modoAcceso = getModoAcceso();
+    NoMiState.nomiWorkerUrl = getNomiWorkerUrl() || NOMI_WORKER_URL_POR_DEFECTO;
+    NoMiState.nomiToken = getNomiToken();
+    NoMiState.nomiModelo = getNomiModelo() || NOMI_MODELO_POR_DEFECTO;
+    NoMiState.nomiAccesoActivo = getNomiAccesoActivo();
+    // El endpoint del Worker es fijo: cualquier URL persistida distinta se resetea.
+    resetearUrlWorkerNoMi();
 
     crearBurbuja();
     crearVentanaChat();
+    // Fija el indicador superior según el modo persistido (NoMi/OpenRouter).
+    actualizarIndicador();
     configurarTeclado();
 
     // Aviso único al inicio sobre el diagnóstico técnico (no se repite).
@@ -2225,7 +2704,7 @@ function iniciarAsistente() {
         actualizarUbicacion(true);
     }
 
-    const mostrarConfig = !NoMiState.configuracionInicialCompletada || !NoMiState.credencialesCargadas;
+    const mostrarConfig = debeMostrarConfiguracionInicial();
 
     if (NoMiState.historial.length === 0) {
         const sistema = `Eres NoMi, un asistente profesional y formal pero cercano. Responde con claridad, respeto y precisión. Evita el tuteo excesivo y mantén un tono de colaboración entre iguales. El usuario espera respuestas útiles, concisas y bien estructuradas.\n\n**Si el usuario pregunta sobre su ubicación (ej: "¿dónde estoy?", "¿en qué ciudad estoy?"), usa los datos de ubicación que tienes en el contexto.** No digas que no tienes acceso a la ubicación.`;
@@ -2234,6 +2713,7 @@ function iniciarAsistente() {
 
         let bienvenida = `Hola, soy **${NOMBRE_ASISTENTE}**, su asistente de navegación.\nPara ver la lista de comandos disponibles, escriba \`!cmd\`.\n`;
         if (mostrarConfig) bienvenida += `\n⚠️ **Es necesario configurar tus credenciales.**\nSe abrirá un asistente de configuración para que importes o ingreses tus claves de API.\n`;
+        else if (NoMiState.modoAcceso === MODO_ACCESO_NOMI && NoMiState.nomiToken && NoMiState.nomiAccesoActivo) bienvenida += `\n🌐 Acceso compartido NoMi activo. Puedes chatear directamente.\n`;
         else if (!NoMiState.credencialesCargadas) bienvenida += `\n⚠️ **Aún no has configurado tus credenciales.** Ve al menú (⚙️) y selecciona "Importar credenciales" o ingresa tus claves manualmente para activar la búsqueda web y el acceso a la IA.\n`;
         else bienvenida += `\n✅ Credenciales cargadas correctamente.\n`;
         bienvenida += `\n¿En qué puedo ayudarle?`;
@@ -2263,7 +2743,18 @@ function iniciarAsistente() {
 }
 
 async function preguntar(texto) {
-    if (!NoMiState.credencialesCargadas || !NoMiState.apiKeyActual) {
+    if (NoMiState.modoAcceso === MODO_ACCESO_NOMI) {
+        // Modo explícito NoMi: exige token Y acceso activo. Sin eso, informa y
+        // NO se hace ninguna petición HTTP (tampoco fallback a OpenRouter).
+        if (!NoMiState.nomiToken) {
+            agregarMensaje('bot', '🔑 **No tienes un token de acceso NoMi.**\n\nActívalo con un código de invitación en ⚙️ Configuración > Acceso compartido NoMi.\nNo se usa OpenRouter en este modo.');
+            return;
+        }
+        if (!NoMiState.nomiAccesoActivo) {
+            agregarMensaje('bot', '⛔ **Tu acceso NoMi no está activo o fue revocado.**\n\nVuelve a activar un código de invitación en ⚙️ Configuración > Acceso compartido NoMi.\nNo se usa OpenRouter en este modo.');
+            return;
+        }
+    } else if (!NoMiState.credencialesCargadas || !NoMiState.apiKeyActual) {
         agregarMensaje('bot', '⚠️ **No hay credenciales configuradas.**\n\nPor favor, ve al menú (⚙️) y configura tus claves de API (OpenRouter y Tavily) o importa un archivo `.enc`.\n\nMientras tanto, puedes usar comandos básicos como `!cmd` para ver la lista de comandos disponibles.');
         return;
     }
@@ -2351,59 +2842,81 @@ async function preguntar(texto) {
     mostrarCargando();
 
     try {
-        const respuesta = await hacerPeticion(NoMiState.urlBaseActual + '/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + NoMiState.apiKeyActual,
-                'HTTP-Referer': window.location.href,
-                'X-Title': 'NoMi Asistente'
-            },
-            body: JSON.stringify({
-                model: NoMiState.modeloActual,
-                messages: [...mensajesParaEnviar, {role: 'user', content: mensajeFinal}],
-                stream: false
-            })
-        });
-        ocultarCargando();
-        if (respuesta.choices && respuesta.choices[0]) {
-            const respuestaTexto = respuesta.choices[0].message.content;
-            document.getElementById('nomi-modelo-display').textContent = NoMiState.modeloActual;
-            if (respuesta.usage) {
-                NoMiState.tokens.total += respuesta.usage.total_tokens || 0;
-                NoMiState.tokens.input += respuesta.usage.prompt_tokens || 0;
-                NoMiState.tokens.output += respuesta.usage.completion_tokens || 0;
-                setTokens(NoMiState.tokens);
-            }
-            NoMiState.contadorPreguntas++;
-            setContador(NoMiState.contadorPreguntas);
-            NoMiState.historial.push({role: 'assistant', content: respuestaTexto});
-            guardarHistorial(NoMiState.historial);
-            agregarMensaje('bot', respuestaTexto);
-            actualizarStats();
-            if (NoMiState.modoResumenActivo && NoMiState.contextoSeleccionado === 10) {
-                setTimeout(() => generarResumen(NoMiState.historial), 100);
-            }
-        } else if (respuesta.error) {
-            agregarMensaje('bot', '❌ Error: ' + (respuesta.error.message || JSON.stringify(respuesta.error)));
-            NoMiState.historial.pop();
-            guardarHistorial(NoMiState.historial);
-            document.getElementById('nomi-modelo-display').textContent = '⚠️ error';
-            registrarError('api', respuesta.error.message || 'Error desconocido en API', `Modelo: ${NoMiState.modeloActual}`);
+        let respuestaTexto;
+        if (NoMiState.modoAcceso === MODO_ACCESO_NOMI) {
+            // Modo explícito "Acceso compartido NoMi": usa el Worker (Bearer token).
+            // El mensaje conserva continuidad (persona + resumen + turnos recientes
+            // + contexto completo: fecha, ubicación y contenido de página) y
+            // respeta el límite de bytes del Worker.
+            actualizarIndicadorProveedor();
+            document.getElementById('nomi-modelo-display').textContent = NoMiState.nomiModelo || NOMI_MODELO_POR_DEFECTO;
+            respuestaTexto = await llamarIANoMi(construirMensajeWorkerNoMi(mensajeFinal));
         } else {
-            agregarMensaje('bot', '❌ Error inesperado');
-            NoMiState.historial.pop();
-            guardarHistorial(NoMiState.historial);
-            document.getElementById('nomi-modelo-display').textContent = '⚠️ error';
-            registrarError('script', 'Respuesta inesperada de la API', 'Sin detalles');
+            const respuesta = await hacerPeticion(NoMiState.urlBaseActual + '/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + NoMiState.apiKeyActual,
+                    'HTTP-Referer': window.location.href,
+                    'X-Title': 'NoMi Asistente'
+                },
+                body: JSON.stringify({
+                    model: NoMiState.modeloActual,
+                    messages: [...mensajesParaEnviar, {role: 'user', content: mensajeFinal}],
+                    stream: false
+                })
+            });
+            if (respuesta.choices && respuesta.choices[0]) {
+                respuestaTexto = respuesta.choices[0].message.content;
+                document.getElementById('nomi-modelo-display').textContent = NoMiState.modeloActual;
+                if (respuesta.usage) {
+                    NoMiState.tokens.total += respuesta.usage.total_tokens || 0;
+                    NoMiState.tokens.input += respuesta.usage.prompt_tokens || 0;
+                    NoMiState.tokens.output += respuesta.usage.completion_tokens || 0;
+                    setTokens(NoMiState.tokens);
+                }
+            } else if (respuesta.error) {
+                agregarMensaje('bot', '❌ Error: ' + (respuesta.error.message || JSON.stringify(respuesta.error)));
+                NoMiState.historial.pop();
+                guardarHistorial(NoMiState.historial);
+                document.getElementById('nomi-modelo-display').textContent = '⚠️ error';
+                registrarError('api', respuesta.error.message || 'Error desconocido en API', `Modelo: ${NoMiState.modeloActual}`);
+                if (input) input.disabled = false;
+                if (enviar) enviar.disabled = false;
+                if (input) input.focus();
+                NoMiState.isWaiting = false;
+                return;
+            } else {
+                agregarMensaje('bot', '❌ Error inesperado');
+                NoMiState.historial.pop();
+                guardarHistorial(NoMiState.historial);
+                document.getElementById('nomi-modelo-display').textContent = '⚠️ error';
+                registrarError('script', 'Respuesta inesperada de la API', 'Sin detalles');
+                if (input) input.disabled = false;
+                if (enviar) enviar.disabled = false;
+                if (input) input.focus();
+                NoMiState.isWaiting = false;
+                return;
+            }
+        }
+        // Ruta de éxito común a ambos modos.
+        ocultarCargando();
+        NoMiState.contadorPreguntas++;
+        setContador(NoMiState.contadorPreguntas);
+        NoMiState.historial.push({role: 'assistant', content: respuestaTexto});
+        guardarHistorial(NoMiState.historial);
+        agregarMensaje('bot', respuestaTexto);
+        actualizarStats();
+        if (NoMiState.modoResumenActivo && NoMiState.contextoSeleccionado === 10) {
+            setTimeout(() => generarResumen(NoMiState.historial), 100);
         }
     } catch (error) {
         ocultarCargando();
-        agregarMensaje('bot', '❌ Error de conexión: ' + error.message);
+        agregarMensaje('bot', '❌ ' + error.message);
         NoMiState.historial.pop();
         guardarHistorial(NoMiState.historial);
         document.getElementById('nomi-modelo-display').textContent = '⚠️ error';
-        registrarError('network', error.message, `URL: ${NoMiState.urlBaseActual}`);
+        registrarError('network', error.message, `Modo: ${NoMiState.modoAcceso}, URL: ${NoMiState.urlBaseActual}`);
     }
     if (input) input.disabled = false;
     if (enviar) enviar.disabled = false;
@@ -2414,21 +2927,27 @@ async function preguntar(texto) {
 async function generarResumen(historialCompleto) {
     if (!NoMiState.modoResumenActivo || NoMiState.contextoSeleccionado !== 10 || historialCompleto.length < 4) return;
     try {
-        const respuesta = await hacerPeticion(NoMiState.urlBaseActual + '/chat/completions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + NoMiState.apiKeyActual },
-            body: JSON.stringify({
-                model: NoMiState.modeloActual,
-                messages: [
-                    { role: 'system', content: 'Eres un asistente que resume conversaciones. Genera un resumen COMPACTO (máximo 300 palabras) de toda la conversación. Incluye temas principales y decisiones. Responde SOLO con el resumen.' },
-                    { role: 'user', content: `Resume esta conversación:\n\n${historialCompleto.map(m => `${m.role === 'user' ? 'Usuario' : 'Asistente'}: ${m.content}`).join('\n')}` }
-                ],
-                stream: false, max_tokens: 500
-            })
-        });
-        if (respuesta.choices && respuesta.choices[0]) {
-            setResumen(respuesta.choices[0].message.content);
+        let textoResumen = null;
+        if (NoMiState.modoAcceso === MODO_ACCESO_NOMI) {
+            textoResumen = await llamarIANoMi(construirMensajeResumenNoMi(historialCompleto));
+        } else {
+            const respuesta = await hacerPeticion(NoMiState.urlBaseActual + '/chat/completions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + NoMiState.apiKeyActual },
+                body: JSON.stringify({
+                    model: NoMiState.modeloActual,
+                    messages: [
+                        { role: 'system', content: 'Eres un asistente que resume conversaciones. Genera un resumen COMPACTO (máximo 300 palabras) de toda la conversación. Incluye temas principales y decisiones. Responde SOLO con el resumen.' },
+                        { role: 'user', content: `Resume esta conversación:\n\n${historialCompleto.map(m => `${m.role === 'user' ? 'Usuario' : 'Asistente'}: ${m.content}`).join('\n')}` }
+                    ],
+                    stream: false, max_tokens: 500
+                })
+            });
+            if (respuesta.choices && respuesta.choices[0]) {
+                textoResumen = respuesta.choices[0].message.content;
+            }
         }
+        if (textoResumen) setResumen(textoResumen);
     } catch (error) {
         registrarError('api', error.message, 'Generación de resumen');
     }
@@ -2465,6 +2984,12 @@ async function generarResumen(historialCompleto) {
     NoMiState.motorBusqueda = getMotorBusqueda();
     NoMiState.diagnosticoActivo = getDiagnosticoActivo();
     NoMiState.avisoDiagnosticoVisto = getAvisoDiagnosticoVisto();
+    NoMiState.modoAcceso = getModoAcceso();
+    NoMiState.nomiWorkerUrl = getNomiWorkerUrl() || NOMI_WORKER_URL_POR_DEFECTO;
+    NoMiState.nomiToken = getNomiToken();
+    NoMiState.nomiModelo = getNomiModelo() || NOMI_MODELO_POR_DEFECTO;
+    NoMiState.nomiAccesoActivo = getNomiAccesoActivo();
+    resetearUrlWorkerNoMi(); // el endpoint es fijo: descarta cualquier URL persistida distinta
     obtenerInstalacionId(); // genera/recupera el ID persistente anónimo de instalación
 
     limpiarHistorialesAntiguos();

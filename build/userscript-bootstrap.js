@@ -28,6 +28,12 @@
     NoMiState.motorBusqueda = getMotorBusqueda();
     NoMiState.diagnosticoActivo = getDiagnosticoActivo();
     NoMiState.avisoDiagnosticoVisto = getAvisoDiagnosticoVisto();
+    NoMiState.modoAcceso = getModoAcceso();
+    NoMiState.nomiWorkerUrl = getNomiWorkerUrl() || NOMI_WORKER_URL_POR_DEFECTO;
+    NoMiState.nomiToken = getNomiToken();
+    NoMiState.nomiModelo = getNomiModelo() || NOMI_MODELO_POR_DEFECTO;
+    NoMiState.nomiAccesoActivo = getNomiAccesoActivo();
+    resetearUrlWorkerNoMi(); // el endpoint es fijo: descarta cualquier URL persistida distinta
     obtenerInstalacionId(); // genera/recupera el ID persistente anónimo de instalación
 
     limpiarHistorialesAntiguos();

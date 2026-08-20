@@ -109,6 +109,19 @@ function getDiagnosticoActivo() { const v = getValor(STORAGE_DIAGNOSTICO_ACTIVO,
 function setDiagnosticoActivo(activo) { setValor(STORAGE_DIAGNOSTICO_ACTIVO, !!activo); NoMiState.diagnosticoActivo = !!activo; }
 function getAvisoDiagnosticoVisto() { return getValor(STORAGE_DIAGNOSTICO_AVISO, false); }
 function setAvisoDiagnosticoVisto(visto) { setValor(STORAGE_DIAGNOSTICO_AVISO, !!visto); NoMiState.avisoDiagnosticoVisto = !!visto; }
+
+// ===== Acceso compartido NoMi (Worker) =====
+// Se guarda únicamente la URL pública del Worker y el token opaco de instalación.
+function getModoAcceso() { return getValor(STORAGE_MODO_ACCESO, MODO_ACCESO_POR_DEFECTO); }
+function setModoAcceso(m) { setValor(STORAGE_MODO_ACCESO, m); NoMiState.modoAcceso = m; }
+function getNomiWorkerUrl() { return getValor(STORAGE_NOMI_WORKER_URL, NOMI_WORKER_URL_POR_DEFECTO); }
+function setNomiWorkerUrl(u) { setValor(STORAGE_NOMI_WORKER_URL, u); NoMiState.nomiWorkerUrl = u; }
+function getNomiToken() { return getValor(STORAGE_NOMI_TOKEN, ''); }
+function setNomiToken(t) { setValor(STORAGE_NOMI_TOKEN, t); NoMiState.nomiToken = t; }
+function getNomiModelo() { return getValor(STORAGE_NOMI_MODELO, NOMI_MODELO_POR_DEFECTO); }
+function setNomiModelo(m) { setValor(STORAGE_NOMI_MODELO, m); NoMiState.nomiModelo = m; }
+function getNomiAccesoActivo() { return getValor(STORAGE_NOMI_ACCESO_ACTIVO, false); }
+function setNomiAccesoActivo(v) { setValor(STORAGE_NOMI_ACCESO_ACTIVO, !!v); NoMiState.nomiAccesoActivo = !!v; }
 // ID aleatorio persistente por instalación (se genera una sola vez y se guarda).
 // Se usa criptografía segura (crypto.randomUUID / crypto.getRandomValues).
 // Si no hay Web Crypto disponible, se retorna null para Omitir el diagnóstico;

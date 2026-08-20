@@ -24,8 +24,9 @@ function mostrarMenu() {
         <h2 style="color:#FF6B6B;margin-top:0;">⚙️ Configuración</h2>
         <div style="margin:10px 0;">
             <div style="margin-bottom:8px;font-size:11px;color:#555;">💾 Espacio ocupado: <span style="color:#888;">${espacioFormateado}</span>${logs.length > 0 ? ` | 📋 Errores: <span style="color:#f55036;">${logs.length}</span>` : ''}${credCargadas ? ' | ✅ Credenciales cargadas' : ' | ❌ Credenciales no configuradas'}</div>
-            <div style="margin-bottom:16px;padding:12px;background:#0d0d1a;border-radius:12px;border:1px solid #333;">
+            <div id="nomi-seccion-openrouter" style="margin-bottom:16px;padding:12px;background:#0d0d1a;border-radius:12px;border:1px solid #333;${NoMiState.modoAcceso === 'nomi' ? 'opacity:0.5;pointer-events:none;' : ''}">
                 <h3 style="color:#4a6cf7;margin:0 0 8px 0;font-size:14px;">🔑 Credenciales</h3>
+                ${NoMiState.modoAcceso === 'nomi' ? '<div style="font-size:10px;color:#f5a623;margin-bottom:6px;font-weight:bold;">Solo disponible en modo OpenRouter. Cambia el modo de acceso para usarlas.</div>' : ''}
                 <div style="margin-bottom:8px;"><label style="font-size:12px;color:#888;display:block;margin-bottom:2px;">OpenRouter API Key</label><input type="password" id="nomi-input-openrouter" value="${apiKeyActual}" style="width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;"></div>
                 <div style="margin-bottom:8px;"><label style="font-size:12px;color:#888;display:block;margin-bottom:2px;">Tavily API Key</label><input type="password" id="nomi-input-tavily" value="${tavilyKeyActual}" style="width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;"><div style="font-size:9px;color:#555;margin-top:2px;">Si no tienes, obtén una gratis en tavily.com</div></div>
                                 <div style="margin-bottom:8px;">
@@ -46,6 +47,24 @@ function mostrarMenu() {
                 <h3 style="color:#36c5f0;margin:0 0 8px 0;font-size:14px;">🩺 Diagnóstico técnico</h3>
                 <label style="display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:6px;"><span>Enviar diagnóstico de errores</span><input type="checkbox" id="nomi-check-diagnostico" ${diagnosticoActivo ? 'checked' : ''}></label>
                 <div style="font-size:10px;color:#888;margin-top:4px;">Solo errores y contexto técnico (dispositivo, red, batería). Nunca se envían claves, chats, ubicación ni URL completa.</div>
+            </div>
+            <div style="margin-bottom:16px;padding:12px;background:#0d0d1a;border-radius:12px;border:1px solid #333;">
+                <h3 style="color:#b06bff;margin:0 0 8px 0;font-size:14px;">🌐 Acceso compartido NoMi</h3>
+                <div style="font-size:11px;color:#888;margin-bottom:8px;">Modo de conexión a la IA. El modo predeterminado es OpenRouter + Tavily (sin cambios).</div>
+                <label style="font-size:12px;color:#888;display:block;margin-bottom:2px;">Modo de acceso</label>
+                <select id="nomi-select-modo" style="width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;">
+                    <option value="openrouter" ${NoMiState.modoAcceso === 'openrouter' ? 'selected' : ''}>OpenRouter + Tavily (predeterminado)</option>
+                    <option value="nomi" ${NoMiState.modoAcceso === 'nomi' ? 'selected' : ''}>Acceso compartido NoMi (Worker)</option>
+                </select>
+                <div id="nomi-seccion-worker" style="display:${NoMiState.modoAcceso === 'nomi' ? 'block' : 'none'};margin-top:8px;">
+                    <div style="font-size:11px;color:#aaa;margin-bottom:4px;">Estado: <span id="nomi-estado-acceso">${estadoAccesoNoMi() === 'activo' ? '✅ Activo' : estadoAccesoNoMi() === 'revocado' ? '⛔ Revocado/inválido' : estadoAccesoNoMi() === 'pendiente' ? '⏳ Pendiente de activación' : 'Desactivado'}</span></div>
+                    <div style="font-size:10px;color:#666;margin-bottom:6px;">Worker: <span style="color:#888;">${NOMI_WORKER_URL_POR_DEFECTO}</span> (fijo, no editable)</div>
+                    <div style="margin-bottom:6px;"><label style="font-size:11px;color:#888;display:block;margin-bottom:2px;">Código de invitación</label><input type="text" id="nomi-input-codigo" placeholder="XXXX-XXXX" style="width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;"></div>
+                    <button id="nomi-activar-acceso" style="width:100%;padding:8px;background:#b06bff;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;margin-bottom:6px;">🔑 Activar con código</button>
+                    <div style="margin-bottom:6px;"><label style="font-size:11px;color:#888;display:block;margin-bottom:2px;">Modelo NoMi</label><select id="nomi-select-modelo-nomi" style="width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;"><option value="${getNomiModelo() || NOMI_MODELO_POR_DEFECTO}">${getNomiModelo() || NOMI_MODELO_POR_DEFECTO}</option></select><div style="display:flex;gap:4px;align-items:center;margin-top:4px;"><button id="nomi-actualizar-modelos-nomi" style="flex:1;padding:4px 6px;background:#3a4a6a;border:none;border-radius:6px;color:#fff;font-size:10px;cursor:pointer;">Cargar modelos</button><span id="nomi-estado-modelo-nomi" style="font-size:9px;color:#aaa;"></span></div></div>
+                    <div style="font-size:10px;color:#555;margin-top:2px;">Solo se guardan la URL pública (fija) y el token opaco. Nunca se guardan claves del Worker.</div>
+                    <button id="nomi-cerrar-acceso-nomi" style="width:100%;padding:6px;background:#f55036;border:none;border-radius:8px;color:#fff;font-size:11px;cursor:pointer;margin-top:6px;">🗑️ Cerrar acceso (borra el token de este navegador)</button>
+                </div>
             </div>
             <div style="margin-bottom:12px;"><label style="display:flex;justify-content:space-between;align-items:center;font-size:14px;"><span>📍 Ubicación</span><input type="checkbox" id="nomi-check-ubicacion" ${NoMiState.ubicacionActivada ? 'checked' : ''}></label><div style="font-size:11px;color:#888;">Permite a NoMi conocer su ubicación para respuestas más precisas (clima, eventos, etc.).</div></div>
             <div style="margin-bottom:12px;"><label style="display:flex;justify-content:space-between;align-items:center;font-size:14px;"><span>🌿 Modo Ligero</span><input type="checkbox" id="nomi-check-ligero" ${NoMiState.modoLigeroActivo ? 'checked' : ''}></label><div style="font-size:11px;color:#888;">Reduce el texto extraído de páginas a 500 caracteres.</div></div>
@@ -101,6 +120,76 @@ function mostrarMenu() {
         menu.remove();
         mostrarNotificacionTemporal(`🩺 Diagnóstico técnico ${NoMiState.diagnosticoActivo ? 'activado' : 'desactivado'}.`);
     };
+
+    // ---- Acceso compartido NoMi (Worker) ----
+    // Alterna la sección OpenRouter (credenciales/modelo/URL) según el modo:
+    // en modo NoMi se deshabilita visual y funcionalmente con el texto indicado.
+    const alternarSeccionOpenRouter = () => {
+        const sec = document.getElementById('nomi-seccion-openrouter');
+        if (!sec) return;
+        const esNoMi = NoMiState.modoAcceso === MODO_ACCESO_NOMI;
+        sec.style.opacity = esNoMi ? '0.5' : '1';
+        sec.style.pointerEvents = esNoMi ? 'none' : 'auto';
+        // Añade/quita el aviso "Solo disponible en modo OpenRouter".
+        let aviso = sec.querySelector('.nomi-openrouter-aviso');
+        const texto = 'Solo disponible en modo OpenRouter. Cambia el modo de acceso para usarlas.';
+        if (esNoMi) {
+            if (!aviso) {
+                aviso = document.createElement('div');
+                aviso.className = 'nomi-openrouter-aviso';
+                aviso.style.cssText = 'font-size:10px;color:#f5a623;margin-bottom:6px;font-weight:bold;';
+                sec.insertBefore(aviso, sec.firstChild.nextSibling);
+            }
+            aviso.textContent = texto;
+        } else if (aviso) {
+            aviso.remove();
+        }
+    };
+    const selModoNoMi = document.getElementById('nomi-select-modo');
+    if (selModoNoMi) selModoNoMi.onchange = (e) => {
+        const m = e.target.value;
+        setModoAcceso(m);
+        const sec = document.getElementById('nomi-seccion-worker');
+        if (sec) sec.style.display = m === 'nomi' ? 'block' : 'none';
+        alternarSeccionOpenRouter();
+        actualizarIndicador();
+        mostrarNotificacionTemporal(`🌐 Modo de acceso: ${m === 'nomi' ? 'Acceso compartido NoMi' : 'OpenRouter + Tavily'}`);
+    };
+    const activarNoMiBtn = document.getElementById('nomi-activar-acceso');
+    if (activarNoMiBtn) activarNoMiBtn.onclick = async () => {
+        const codigo = document.getElementById('nomi-input-codigo').value.trim();
+        if (!codigo) { mostrarNotificacionTemporal('❌ Introduce el código de invitación.'); return; }
+        activarNoMiBtn.disabled = true;
+        activarNoMiBtn.textContent = '⏳ Activando…';
+        try {
+            await activarAccesoNoMi(codigo);
+            setModoAcceso(MODO_ACCESO_NOMI);
+            const sel = document.getElementById('nomi-select-modo');
+            if (sel) sel.value = 'nomi';
+            const sec = document.getElementById('nomi-seccion-worker');
+            if (sec) sec.style.display = 'block';
+            alternarSeccionOpenRouter();
+            actualizarIndicador();
+            const est = document.getElementById('nomi-estado-acceso');
+            if (est) est.textContent = '✅ Activo';
+            mostrarNotificacionTemporal('✅ Acceso NoMi activado. Ya puedes chatear.');
+            cargarModelosNoMiAlMenu();
+        } catch (err) {
+            mostrarNotificacionTemporal('❌ ' + err.message);
+        } finally {
+            activarNoMiBtn.disabled = false;
+            activarNoMiBtn.textContent = '🔑 Activar con código';
+        }
+    };
+    const cerrarNoMiBtn = document.getElementById('nomi-cerrar-acceso-nomi');
+    if (cerrarNoMiBtn) cerrarNoMiBtn.onclick = () => {
+        cerrarAccesoNoMi();
+        const est = document.getElementById('nomi-estado-acceso');
+        if (est) est.textContent = '⏳ Pendiente de activación';
+    };
+    const actualizarNoMiModelos = document.getElementById('nomi-actualizar-modelos-nomi');
+    if (actualizarNoMiModelos) actualizarNoMiModelos.onclick = () => cargarModelosNoMiAlMenu();
+    if (getNomiToken()) cargarModelosNoMiAlMenu();
     document.getElementById('nomi-select-motor').onchange = (e) => {
         NoMiState.motorBusqueda = e.target.value;
         setMotorBusqueda(NoMiState.motorBusqueda);
@@ -285,4 +374,33 @@ async function cargarModelosAlMenu(force) {
     }
     estado.textContent = `${lista.length} modelos gratuitos`;
     select.disabled = false;
+}
+
+// ---- Selector de modelos del catálogo NoMi (Worker) ----
+// Puebla el <select id="nomi-select-modelo-nomi"> con los modelos groq activos
+// del catálogo público. Conserva el modelo actual si no aparece.
+async function cargarModelosNoMiAlMenu() {
+    const select = document.getElementById('nomi-select-modelo-nomi');
+    const estado = document.getElementById('nomi-estado-modelo-nomi');
+    if (!select) return;
+    if (estado) estado.textContent = 'Cargando…';
+    try {
+        const cat = await obtenerCatalogoNoMi();
+        const lista = (cat && cat.modelos || []).filter(m => m && m.proveedor === 'groq' && m.estado === 'activo');
+        const actual = getNomiModelo() || NOMI_MODELO_POR_DEFECTO;
+        select.innerHTML = '';
+        lista.forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = m.id;
+            opt.textContent = `${m.nombre || m.id} | ${m.id}`;
+            if (m.id === actual) opt.selected = true;
+            select.appendChild(opt);
+        });
+        select.onchange = () => { setNomiModelo(select.value); actualizarIndicador(); };
+        if (estado) estado.textContent = `${lista.length} modelos`;
+    } catch (e) {
+        if (estado) estado.textContent = 'No se pudo cargar el catálogo.';
+        const actual = getNomiModelo() || NOMI_MODELO_POR_DEFECTO;
+        select.innerHTML = `<option value="${actual}">${actual}</option>`;
+    }
 }
