@@ -12,7 +12,11 @@ function agregarMensaje(quien, texto) {
         background:${color}33; border-left:3px solid ${color};
         font-size:12px; word-wrap:break-word;
     `;
-    msg.innerHTML = `<b style="color:${color};">${nombre}:</b> ${texto}`;
+    const nombreMsg = document.createElement('b');
+    nombreMsg.style.color = color;
+    nombreMsg.textContent = `${nombre}:`;
+    msg.appendChild(nombreMsg);
+    msg.appendChild(document.createTextNode(' ' + texto));
     chatBody.appendChild(msg);
     chatBody.scrollTop = chatBody.scrollHeight;
 }
@@ -20,7 +24,7 @@ function agregarMensaje(quien, texto) {
 function cargarHistorial() {
     const chatBody = document.getElementById('nomi-chat-body');
     if (!chatBody) return;
-    chatBody.innerHTML = '';
+    nomiVaciarNodo(chatBody);
     const mensajesMostrar = NoMiState.historial
         .filter(msg => msg.role !== 'system')
         .slice(-MENSAJES_VISIBLES);
@@ -41,7 +45,11 @@ function cargarHistorial() {
             background:${color}33; border-left:3px solid ${color};
             font-size:12px; word-wrap:break-word;
         `;
-        msgDiv.innerHTML = `<b style="color:${color};">${nombre}:</b> ${msg.content}`;
+        const nombreMsg = document.createElement('b');
+        nombreMsg.style.color = color;
+        nombreMsg.textContent = `${nombre}:`;
+        msgDiv.appendChild(nombreMsg);
+        msgDiv.appendChild(document.createTextNode(' ' + msg.content));
         chatBody.appendChild(msgDiv);
     });
     chatBody.scrollTop = chatBody.scrollHeight;

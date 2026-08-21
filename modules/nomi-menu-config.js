@@ -20,67 +20,196 @@ function mostrarMenu() {
     const motor = getMotorBusqueda();
     const diagnosticoActivo = getDiagnosticoActivo();
 
-    menu.innerHTML = `
-        <h2 style="color:#FF6B6B;margin-top:0;">⚙️ Configuración</h2>
-        <div style="margin:10px 0;">
-            <div style="margin-bottom:8px;font-size:11px;color:#555;">💾 Espacio ocupado: <span style="color:#888;">${espacioFormateado}</span>${logs.length > 0 ? ` | 📋 Errores: <span style="color:#f55036;">${logs.length}</span>` : ''}${credCargadas ? ' | ✅ Credenciales cargadas' : ' | ❌ Credenciales no configuradas'}</div>
-            <div id="nomi-seccion-openrouter" style="margin-bottom:16px;padding:12px;background:#0d0d1a;border-radius:12px;border:1px solid #333;${NoMiState.modoAcceso === 'nomi' ? 'opacity:0.5;pointer-events:none;' : ''}">
-                <h3 style="color:#4a6cf7;margin:0 0 8px 0;font-size:14px;">🔑 Credenciales</h3>
-                ${NoMiState.modoAcceso === 'nomi' ? '<div style="font-size:10px;color:#f5a623;margin-bottom:6px;font-weight:bold;">Solo disponible en modo OpenRouter. Cambia el modo de acceso para usarlas.</div>' : ''}
-                <div style="margin-bottom:8px;"><label style="font-size:12px;color:#888;display:block;margin-bottom:2px;">OpenRouter API Key</label><input type="password" id="nomi-input-openrouter" value="${apiKeyActual}" style="width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;"></div>
-                <div style="margin-bottom:8px;"><label style="font-size:12px;color:#888;display:block;margin-bottom:2px;">Tavily API Key</label><input type="password" id="nomi-input-tavily" value="${tavilyKeyActual}" style="width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;"><div style="font-size:9px;color:#555;margin-top:2px;">Si no tienes, obtén una gratis en tavily.com</div></div>
-                                <div style="margin-bottom:8px;">
-                    <label style="font-size:12px;color:#888;display:block;margin-bottom:2px;">Modelo gratuito</label>
-                    <select id="nomi-input-modelo" style="width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;"></select>
-                    <div style="display:flex;gap:4px;align-items:center;margin-top:4px;">
-                        <button id="nomi-actualizar-modelos" style="flex:1;padding:4px 6px;background:#3a4a6a;border:none;border-radius:6px;color:#fff;font-size:10px;cursor:pointer;">Actualizar</button>
-                        <span id="nomi-estado-modelo" style="font-size:9px;color:#aaa;"></span>
-                    </div>
-                    <div style="font-size:9px;color:#888;margin-top:4px;">Lista ordenada por latencia estimada de OpenRouter. Menor número = menor latencia estimada según OpenRouter.</div>
-                </div>
-                <div style="margin-bottom:8px;"><label style="font-size:12px;color:#888;display:block;margin-bottom:2px;">URL Base</label><input type="text" id="nomi-input-url" value="${urlBaseActual}" style="width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;"></div>
-                <div style="display:flex;gap:8px;"><button id="nomi-guardar-creds" style="flex:1;padding:8px;background:#4a6cf7;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;">💾 Guardar</button><button id="nomi-importar-creds-menu" style="flex:1;padding:8px;background:#34a853;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;">📥 Importar .enc</button></div>
-                <div style="font-size:10px;color:#555;margin-top:4px;">Las claves se guardan localmente en tu navegador.</div>
-            </div>
-            <div style="margin-bottom:12px;"><label style="font-size:14px;display:block;margin-bottom:4px;">🔍 Motor de búsqueda</label><select id="nomi-select-motor" style="width:100%;padding:8px;border-radius:8px;background:#0d0d1a;color:#fff;border:1px solid #555;"><option value="tavily" ${motor === 'tavily' ? 'selected' : ''}>Tavily (requiere clave)</option><option value="ninguno" ${motor === 'ninguno' ? 'selected' : ''}>Ninguno (sin búsqueda web)</option></select><div style="font-size:11px;color:#888;">Elige el motor de búsqueda para obtener información actualizada.</div></div>
-            <div style="margin-bottom:16px;padding:12px;background:#0d0d1a;border-radius:12px;border:1px solid #333;">
-                <h3 style="color:#36c5f0;margin:0 0 8px 0;font-size:14px;">🩺 Diagnóstico técnico</h3>
-                <label style="display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:6px;"><span>Enviar diagnóstico de errores</span><input type="checkbox" id="nomi-check-diagnostico" ${diagnosticoActivo ? 'checked' : ''}></label>
-                <div style="font-size:10px;color:#888;margin-top:4px;">Solo errores y contexto técnico (dispositivo, red, batería). Nunca se envían claves, chats, ubicación ni URL completa.</div>
-            </div>
-            <div style="margin-bottom:16px;padding:12px;background:#0d0d1a;border-radius:12px;border:1px solid #333;">
-                <h3 style="color:#b06bff;margin:0 0 8px 0;font-size:14px;">🌐 Acceso compartido NoMi</h3>
-                <div style="font-size:11px;color:#888;margin-bottom:8px;">Modo de conexión a la IA. El modo predeterminado es OpenRouter + Tavily (sin cambios).</div>
-                <label style="font-size:12px;color:#888;display:block;margin-bottom:2px;">Modo de acceso</label>
-                <select id="nomi-select-modo" style="width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;">
-                    <option value="openrouter" ${NoMiState.modoAcceso === 'openrouter' ? 'selected' : ''}>OpenRouter + Tavily (predeterminado)</option>
-                    <option value="nomi" ${NoMiState.modoAcceso === 'nomi' ? 'selected' : ''}>Acceso compartido NoMi (Worker)</option>
-                </select>
-                <div id="nomi-seccion-worker" style="display:${NoMiState.modoAcceso === 'nomi' ? 'block' : 'none'};margin-top:8px;">
-                    <div style="font-size:11px;color:#aaa;margin-bottom:4px;">Estado: <span id="nomi-estado-acceso">${estadoAccesoNoMi() === 'activo' ? '✅ Activo' : estadoAccesoNoMi() === 'revocado' ? '⛔ Revocado/inválido' : estadoAccesoNoMi() === 'pendiente' ? '⏳ Pendiente de activación' : 'Desactivado'}</span></div>
-                    <div style="font-size:10px;color:#666;margin-bottom:6px;">Worker: <span style="color:#888;">${NOMI_WORKER_URL_POR_DEFECTO}</span> (fijo, no editable)</div>
-                    <div style="margin-bottom:6px;"><label style="font-size:11px;color:#888;display:block;margin-bottom:2px;">Código de invitación</label><input type="text" id="nomi-input-codigo" placeholder="XXXX-XXXX" style="width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;"></div>
-                    <button id="nomi-activar-acceso" style="width:100%;padding:8px;background:#b06bff;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;margin-bottom:6px;">🔑 Activar con código</button>
-                    <div style="margin-bottom:6px;"><label style="font-size:11px;color:#888;display:block;margin-bottom:2px;">Modelo NoMi</label><select id="nomi-select-modelo-nomi" style="width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;"><option value="${getNomiModelo() || NOMI_MODELO_POR_DEFECTO}">${getNomiModelo() || NOMI_MODELO_POR_DEFECTO}</option></select><div style="display:flex;gap:4px;align-items:center;margin-top:4px;"><button id="nomi-actualizar-modelos-nomi" style="flex:1;padding:4px 6px;background:#3a4a6a;border:none;border-radius:6px;color:#fff;font-size:10px;cursor:pointer;">Cargar modelos</button><span id="nomi-estado-modelo-nomi" style="font-size:9px;color:#aaa;"></span></div></div>
-                    <div style="font-size:10px;color:#555;margin-top:2px;">Solo se guardan la URL pública (fija) y el token opaco. Nunca se guardan claves del Worker.</div>
-                    <button id="nomi-cerrar-acceso-nomi" style="width:100%;padding:6px;background:#f55036;border:none;border-radius:8px;color:#fff;font-size:11px;cursor:pointer;margin-top:6px;">🗑️ Cerrar acceso (borra el token de este navegador)</button>
-                </div>
-            </div>
-            <div style="margin-bottom:12px;"><label style="display:flex;justify-content:space-between;align-items:center;font-size:14px;"><span>📍 Ubicación</span><input type="checkbox" id="nomi-check-ubicacion" ${NoMiState.ubicacionActivada ? 'checked' : ''}></label><div style="font-size:11px;color:#888;">Permite a NoMi conocer su ubicación para respuestas más precisas (clima, eventos, etc.).</div></div>
-            <div style="margin-bottom:12px;"><label style="display:flex;justify-content:space-between;align-items:center;font-size:14px;"><span>🌿 Modo Ligero</span><input type="checkbox" id="nomi-check-ligero" ${NoMiState.modoLigeroActivo ? 'checked' : ''}></label><div style="font-size:11px;color:#888;">Reduce el texto extraído de páginas a 500 caracteres.</div></div>
-            <div style="margin-bottom:12px;"><label style="font-size:14px;display:block;margin-bottom:4px;">📌 Contexto</label><div style="display:flex;gap:8px;">${CONTEXTOS_DISPONIBLES.map(c => `<label style="font-size:13px;display:flex;align-items:center;gap:4px;"><input type="radio" name="contexto" value="${c}" ${NoMiState.contextoSeleccionado === c ? 'checked' : ''}>${c}</label>`).join('')}</div><div style="font-size:11px;color:#888;">Número de mensajes enviados al modelo (recomendado: 10).</div></div>
-            <div style="margin-bottom:12px;"><label style="display:flex;justify-content:space-between;align-items:center;font-size:14px;"><span>🧠 Resumen persistente</span><input type="checkbox" id="nomi-check-resumen" ${NoMiState.modoResumenActivo ? 'checked' : ''} ${resumenDisabled ? 'disabled' : ''}></label><div style="font-size:11px;color:#888;">${resumenDisabled ? 'Solo disponible con 10 mensajes.' : 'Guarda un resumen de la conversación para contexto a largo plazo.'}</div></div>
-            <div style="margin-bottom:12px;"><label style="font-size:14px;display:block;margin-bottom:4px;">📐 Tamaño de la ventana</label><div style="display:flex;gap:8px;margin-top:4px;"><label>Ancho (px): <input type="number" id="nomi-width-input" value="${w}" min="280" step="10" style="width:70px;padding:4px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;"></label><label>Alto (px): <input type="number" id="nomi-height-input" value="${h}" min="300" step="10" style="width:70px;padding:4px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;"></label></div><div style="display:flex;gap:6px;margin-top:6px;"><button id="nomi-size-apply" style="padding:4px 12px;background:#4a6cf7;border:none;border-radius:6px;color:#fff;cursor:pointer;">Aplicar</button><button id="nomi-size-default" style="padding:4px 12px;background:#555;border:none;border-radius:6px;color:#fff;cursor:pointer;">Predeterminado</button></div></div>
-            <div style="margin-bottom:12px;"><label style="display:flex;justify-content:space-between;align-items:center;font-size:14px;"><span>🔍 Búsqueda web</span><input type="checkbox" id="nomi-check-busqueda" ${NoMiState.busquedaWebActiva ? 'checked' : ''} ${credCargadas ? '' : 'disabled'}></label><div style="font-size:11px;color:#888;">${credCargadas ? 'Activa la búsqueda web automática (detección de palabras clave).' : 'Primero configura tus credenciales.'}</div></div>
-            <button id="nomi-menu-restaurar" style="width:100%;padding:10px;background:#555;border:none;border-radius:10px;color:#fff;font-size:14px;cursor:pointer;margin-bottom:8px;">🔄 Restaurar posición</button>
-            <button id="nomi-menu-limpiar" style="width:100%;padding:10px;background:#f55036;border:none;border-radius:10px;color:#fff;font-size:14px;cursor:pointer;margin-bottom:8px;">🗑️ Limpiar datos antiguos</button>
-            <button id="nomi-menu-exportar-logs" style="width:100%;padding:10px;background:#4a6cf7;border:none;border-radius:10px;color:#fff;font-size:14px;cursor:pointer;margin-bottom:8px;">📤 Exportar logs de error</button>
-            <button id="nomi-menu-eliminar-global" style="width:100%;padding:10px;background:#f55036;border:none;border-radius:10px;color:#fff;font-size:14px;cursor:pointer;margin-bottom:8px;">🗑️ Eliminar datos globales</button>
-            <button id="nomi-menu-cerrar-sesion" style="width:100%;padding:10px;background:#f55036;border:none;border-radius:10px;color:#fff;font-size:14px;cursor:pointer;margin-bottom:8px;">🚪 Cerrar sesión</button>
-            <button id="nomi-menu-cerrar" style="width:100%;padding:10px;background:none;border:none;color:#888;font-size:14px;cursor:pointer;">Cerrar</button>
-        </div>
-        <div style="margin-top:16px;padding-top:12px;border-top:1px solid #333;font-size:11px;color:#555;text-align:center;">ℹ️ <b>Acerca de NoMi</b><br>Asistente IA desarrollado por <b>${DISEÑADOR}</b><br>Powered by <b>OpenRouter</b> & <b>Tavily</b><br>Modelo: <b>${modeloActual}</b><br>Versión: <b>${VERSION_SCRIPT}</b> (${FECHA_LANZAMIENTO})<br><span style="color:#444;">ℹ️ En páginas de configuración de Google (accounts.google.com), la burbuja puede no aparecer. Vuelva a la página anterior o recargue.</span></div>
-    `;
+    const lineaEspacio = nomiCrearNodo('div', { css: 'margin-bottom:8px;font-size:11px;color:#555;' });
+    lineaEspacio.appendChild(document.createTextNode('💾 Espacio ocupado: '));
+    lineaEspacio.appendChild(nomiCrearNodo('span', { css: 'color:#888;', texto: espacioFormateado }));
+    if (logs.length > 0) {
+        lineaEspacio.appendChild(document.createTextNode(' | 📋 Errores: '));
+        lineaEspacio.appendChild(nomiCrearNodo('span', { css: 'color:#f55036;', texto: String(logs.length) }));
+    }
+    lineaEspacio.appendChild(document.createTextNode(credCargadas ? ' | ✅ Credenciales cargadas' : ' | ❌ Credenciales no configuradas'));
+
+    const secOpen = nomiCrearNodo('div', { id: 'nomi-seccion-openrouter', css: 'margin-bottom:16px;padding:12px;background:#0d0d1a;border-radius:12px;border:1px solid #333;' + (NoMiState.modoAcceso === 'nomi' ? 'opacity:0.5;pointer-events:none;' : '') });
+    secOpen.appendChild(nomiCrearNodo('h3', { css: 'color:#4a6cf7;margin:0 0 8px 0;font-size:14px;', texto: '🔑 Credenciales' }));
+    if (NoMiState.modoAcceso === 'nomi') {
+        secOpen.appendChild(nomiCrearNodo('div', { clase: 'nomi-openrouter-aviso', css: 'font-size:10px;color:#f5a623;margin-bottom:6px;font-weight:bold;', texto: 'Solo disponible en modo OpenRouter. Cambia el modo de acceso para usarlas.' }));
+    }
+    const filaOR = nomiCrearNodo('div', { css: 'margin-bottom:8px;' });
+    filaOR.appendChild(nomiCrearNodo('label', { css: 'font-size:12px;color:#888;display:block;margin-bottom:2px;', texto: 'OpenRouter API Key' }));
+    filaOR.appendChild(nomiCrearNodo('input', { id: 'nomi-input-openrouter', valor: apiKeyActual, atributos: { type: 'password' }, css: 'width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;' }));
+    secOpen.appendChild(filaOR);
+    const filaTav = nomiCrearNodo('div', { css: 'margin-bottom:8px;' });
+    filaTav.appendChild(nomiCrearNodo('label', { css: 'font-size:12px;color:#888;display:block;margin-bottom:2px;', texto: 'Tavily API Key' }));
+    filaTav.appendChild(nomiCrearNodo('input', { id: 'nomi-input-tavily', valor: tavilyKeyActual, atributos: { type: 'password' }, css: 'width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;' }));
+    filaTav.appendChild(nomiCrearNodo('div', { css: 'font-size:9px;color:#555;margin-top:2px;', texto: 'Si no tienes, obtén una gratis en tavily.com' }));
+    secOpen.appendChild(filaTav);
+    const filaModeloMenu = nomiCrearNodo('div', { css: 'margin-bottom:8px;' });
+    filaModeloMenu.appendChild(nomiCrearNodo('label', { css: 'font-size:12px;color:#888;display:block;margin-bottom:2px;', texto: 'Modelo gratuito' }));
+    filaModeloMenu.appendChild(nomiCrearNodo('select', { id: 'nomi-input-modelo', css: 'width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;' }));
+    filaModeloMenu.appendChild(nomiCrearNodo('div', { css: 'display:flex;gap:4px;align-items:center;margin-top:4px;', hijos: [
+        nomiCrearNodo('button', { id: 'nomi-actualizar-modelos', css: 'flex:1;padding:4px 6px;background:#3a4a6a;border:none;border-radius:6px;color:#fff;font-size:10px;cursor:pointer;', texto: 'Actualizar' }),
+        nomiCrearNodo('span', { id: 'nomi-estado-modelo', css: 'font-size:9px;color:#aaa;' })
+    ]}));
+    filaModeloMenu.appendChild(nomiCrearNodo('div', { css: 'font-size:9px;color:#888;margin-top:4px;', texto: 'Lista ordenada por latencia estimada de OpenRouter. Menor número = menor latencia estimada según OpenRouter.' }));
+    secOpen.appendChild(filaModeloMenu);
+    const filaUrl = nomiCrearNodo('div', { css: 'margin-bottom:8px;' });
+    filaUrl.appendChild(nomiCrearNodo('label', { css: 'font-size:12px;color:#888;display:block;margin-bottom:2px;', texto: 'URL Base' }));
+    filaUrl.appendChild(nomiCrearNodo('input', { id: 'nomi-input-url', valor: urlBaseActual, atributos: { type: 'text' }, css: 'width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;' }));
+    secOpen.appendChild(filaUrl);
+    secOpen.appendChild(nomiCrearNodo('div', { css: 'display:flex;gap:8px;', hijos: [
+        nomiCrearNodo('button', { id: 'nomi-guardar-creds', css: 'flex:1;padding:8px;background:#4a6cf7;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;', texto: '💾 Guardar' }),
+        nomiCrearNodo('button', { id: 'nomi-importar-creds-menu', css: 'flex:1;padding:8px;background:#34a853;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;', texto: '📥 Importar .enc' })
+    ]}));
+    secOpen.appendChild(nomiCrearNodo('div', { css: 'font-size:10px;color:#555;margin-top:4px;', texto: 'Las claves se guardan localmente en tu navegador.' }));
+
+    const secMotor = nomiCrearNodo('div', { css: 'margin-bottom:12px;' });
+    secMotor.appendChild(nomiCrearNodo('label', { css: 'font-size:14px;display:block;margin-bottom:4px;', texto: '🔍 Motor de búsqueda' }));
+    secMotor.appendChild(nomiCrearNodo('select', { id: 'nomi-select-motor', css: 'width:100%;padding:8px;border-radius:8px;background:#0d0d1a;color:#fff;border:1px solid #555;', hijos: [
+        nomiCrearNodo('option', { valor: 'tavily', seleccionado: motor === 'tavily', texto: 'Tavily (requiere clave)' }),
+        nomiCrearNodo('option', { valor: 'ninguno', seleccionado: motor === 'ninguno', texto: 'Ninguno (sin búsqueda web)' })
+    ]}));
+    secMotor.appendChild(nomiCrearNodo('div', { css: 'font-size:11px;color:#888;', texto: 'Elige el motor de búsqueda para obtener información actualizada.' }));
+
+    const secDiag = nomiCrearNodo('div', { css: 'margin-bottom:16px;padding:12px;background:#0d0d1a;border-radius:12px;border:1px solid #333;' });
+    secDiag.appendChild(nomiCrearNodo('h3', { css: 'color:#36c5f0;margin:0 0 8px 0;font-size:14px;', texto: '🩺 Diagnóstico técnico' }));
+    secDiag.appendChild(nomiCrearNodo('label', { css: 'display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:6px;', hijos: [
+        document.createTextNode('Enviar diagnóstico de errores'),
+        nomiCrearNodo('input', { id: 'nomi-check-diagnostico', marcado: diagnosticoActivo, atributos: { type: 'checkbox' } })
+    ]}));
+    secDiag.appendChild(nomiCrearNodo('div', { css: 'font-size:10px;color:#888;margin-top:4px;', texto: 'Solo errores y contexto técnico (dispositivo, red, batería). Nunca se envían claves, chats, ubicación ni URL completa.' }));
+
+    const estadoAcc = estadoAccesoNoMi();
+    const txtEstadoAcc = estadoAcc === 'activo' ? '✅ Activo' : estadoAcc === 'revocado' ? '⛔ Revocado/inválido' : estadoAcc === 'pendiente' ? '⏳ Pendiente de activación' : 'Desactivado';
+    const secNomi = nomiCrearNodo('div', { css: 'margin-bottom:16px;padding:12px;background:#0d0d1a;border-radius:12px;border:1px solid #333;' });
+    secNomi.appendChild(nomiCrearNodo('h3', { css: 'color:#b06bff;margin:0 0 8px 0;font-size:14px;', texto: '🌐 Acceso compartido NoMi' }));
+    secNomi.appendChild(nomiCrearNodo('div', { css: 'font-size:11px;color:#888;margin-bottom:8px;', texto: 'Modo de conexión a la IA. El modo predeterminado es OpenRouter + Tavily (sin cambios).' }));
+    secNomi.appendChild(nomiCrearNodo('label', { css: 'font-size:12px;color:#888;display:block;margin-bottom:2px;', texto: 'Modo de acceso' }));
+    secNomi.appendChild(nomiCrearNodo('select', { id: 'nomi-select-modo', css: 'width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;', hijos: [
+        nomiCrearNodo('option', { valor: 'openrouter', seleccionado: NoMiState.modoAcceso === 'openrouter', texto: 'OpenRouter + Tavily (predeterminado)' }),
+        nomiCrearNodo('option', { valor: 'nomi', seleccionado: NoMiState.modoAcceso === 'nomi', texto: 'Acceso compartido NoMi (Worker)' })
+    ]}));
+    const secWorker = nomiCrearNodo('div', { id: 'nomi-seccion-worker', css: `display:${NoMiState.modoAcceso === 'nomi' ? 'block' : 'none'};margin-top:8px;` });
+    secWorker.appendChild(nomiCrearNodo('div', { css: 'font-size:11px;color:#aaa;margin-bottom:4px;', hijos: [
+        document.createTextNode('Estado: '),
+        nomiCrearNodo('span', { id: 'nomi-estado-acceso', texto: txtEstadoAcc })
+    ]}));
+    secWorker.appendChild(nomiCrearNodo('div', { css: 'font-size:10px;color:#666;margin-bottom:6px;', hijos: [
+        document.createTextNode('Worker: '),
+        nomiCrearNodo('span', { css: 'color:#888;', texto: NOMI_WORKER_URL_POR_DEFECTO }),
+        document.createTextNode(' (fijo, no editable)')
+    ]}));
+    const filaCodigo = nomiCrearNodo('div', { css: 'margin-bottom:6px;' });
+    filaCodigo.appendChild(nomiCrearNodo('label', { css: 'font-size:11px;color:#888;display:block;margin-bottom:2px;', texto: 'Código de invitación' }));
+    filaCodigo.appendChild(nomiCrearNodo('input', { id: 'nomi-input-codigo', atributos: { type: 'text', placeholder: 'XXXX-XXXX' }, css: 'width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;' }));
+    secWorker.appendChild(filaCodigo);
+    secWorker.appendChild(nomiCrearNodo('button', { id: 'nomi-activar-acceso', css: 'width:100%;padding:8px;background:#b06bff;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;margin-bottom:6px;', texto: '🔑 Activar con código' }));
+    const filaModeloNomi = nomiCrearNodo('div', { css: 'margin-bottom:6px;' });
+    filaModeloNomi.appendChild(nomiCrearNodo('label', { css: 'font-size:11px;color:#888;display:block;margin-bottom:2px;', texto: 'Modelo NoMi' }));
+    const nomiModeloActual = getNomiModelo() || NOMI_MODELO_POR_DEFECTO;
+    filaModeloNomi.appendChild(nomiCrearNodo('select', { id: 'nomi-select-modelo-nomi', css: 'width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;', hijos: [
+        nomiCrearNodo('option', { valor: nomiModeloActual, texto: nomiModeloActual })
+    ]}));
+    filaModeloNomi.appendChild(nomiCrearNodo('div', { css: 'display:flex;gap:4px;align-items:center;margin-top:4px;', hijos: [
+        nomiCrearNodo('button', { id: 'nomi-actualizar-modelos-nomi', css: 'flex:1;padding:4px 6px;background:#3a4a6a;border:none;border-radius:6px;color:#fff;font-size:10px;cursor:pointer;', texto: 'Cargar modelos' }),
+        nomiCrearNodo('span', { id: 'nomi-estado-modelo-nomi', css: 'font-size:9px;color:#aaa;' })
+    ]}));
+    secWorker.appendChild(filaModeloNomi);
+    secWorker.appendChild(nomiCrearNodo('div', { css: 'font-size:10px;color:#555;margin-top:2px;', texto: 'Solo se guardan la URL pública (fija) y el token opaco. Nunca se guardan claves del Worker.' }));
+    secWorker.appendChild(nomiCrearNodo('button', { id: 'nomi-cerrar-acceso-nomi', css: 'width:100%;padding:6px;background:#f55036;border:none;border-radius:8px;color:#fff;font-size:11px;cursor:pointer;margin-top:6px;', texto: '🗑️ Cerrar acceso (borra el token de este navegador)' }));
+    secNomi.appendChild(secWorker);
+
+    const secUbi = nomiCrearNodo('div', { css: 'margin-bottom:12px;' });
+    secUbi.appendChild(nomiCrearNodo('label', { css: 'display:flex;justify-content:space-between;align-items:center;font-size:14px;', hijos: [
+        document.createTextNode('📍 Ubicación'),
+        nomiCrearNodo('input', { id: 'nomi-check-ubicacion', marcado: NoMiState.ubicacionActivada, atributos: { type: 'checkbox' } })
+    ]}));
+    secUbi.appendChild(nomiCrearNodo('div', { css: 'font-size:11px;color:#888;', texto: 'Permite a NoMi conocer su ubicación para respuestas más precisas (clima, eventos, etc.).' }));
+
+    const secLig = nomiCrearNodo('div', { css: 'margin-bottom:12px;' });
+    secLig.appendChild(nomiCrearNodo('label', { css: 'display:flex;justify-content:space-between;align-items:center;font-size:14px;', hijos: [
+        document.createTextNode('🌿 Modo Ligero'),
+        nomiCrearNodo('input', { id: 'nomi-check-ligero', marcado: NoMiState.modoLigeroActivo, atributos: { type: 'checkbox' } })
+    ]}));
+    secLig.appendChild(nomiCrearNodo('div', { css: 'font-size:11px;color:#888;', texto: 'Reduce el texto extraído de páginas a 500 caracteres.' }));
+
+    const secCtx = nomiCrearNodo('div', { css: 'margin-bottom:12px;' });
+    secCtx.appendChild(nomiCrearNodo('label', { css: 'font-size:14px;display:block;margin-bottom:4px;', texto: '📌 Contexto' }));
+    const radiosCtx = nomiCrearNodo('div', { css: 'display:flex;gap:8px;' });
+    CONTEXTOS_DISPONIBLES.forEach(c => {
+        radiosCtx.appendChild(nomiCrearNodo('label', { css: 'font-size:13px;display:flex;align-items:center;gap:4px;', hijos: [
+            nomiCrearNodo('input', { atributos: { type: 'radio', name: 'contexto', value: String(c) }, marcado: NoMiState.contextoSeleccionado === c }),
+            document.createTextNode(String(c))
+        ]}));
+    });
+    secCtx.appendChild(radiosCtx);
+    secCtx.appendChild(nomiCrearNodo('div', { css: 'font-size:11px;color:#888;', texto: 'Número de mensajes enviados al modelo (recomendado: 10).' }));
+
+    const secRes = nomiCrearNodo('div', { css: 'margin-bottom:12px;' });
+    secRes.appendChild(nomiCrearNodo('label', { css: 'display:flex;justify-content:space-between;align-items:center;font-size:14px;', hijos: [
+        document.createTextNode('🧠 Resumen persistente'),
+        nomiCrearNodo('input', { id: 'nomi-check-resumen', marcado: NoMiState.modoResumenActivo, deshabilitado: resumenDisabled, atributos: { type: 'checkbox' } })
+    ]}));
+    secRes.appendChild(nomiCrearNodo('div', { css: 'font-size:11px;color:#888;', texto: resumenDisabled ? 'Solo disponible con 10 mensajes.' : 'Guarda un resumen de la conversación para contexto a largo plazo.' }));
+
+    const secTam = nomiCrearNodo('div', { css: 'margin-bottom:12px;' });
+    secTam.appendChild(nomiCrearNodo('label', { css: 'font-size:14px;display:block;margin-bottom:4px;', texto: '📐 Tamaño de la ventana' }));
+    secTam.appendChild(nomiCrearNodo('div', { css: 'display:flex;gap:8px;margin-top:4px;', hijos: [
+        nomiCrearNodo('label', { hijos: [
+            document.createTextNode('Ancho (px): '),
+            nomiCrearNodo('input', { id: 'nomi-width-input', valor: String(w), atributos: { type: 'number', min: '280', step: '10' }, css: 'width:70px;padding:4px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;' })
+        ]}),
+        nomiCrearNodo('label', { hijos: [
+            document.createTextNode('Alto (px): '),
+            nomiCrearNodo('input', { id: 'nomi-height-input', valor: String(h), atributos: { type: 'number', min: '300', step: '10' }, css: 'width:70px;padding:4px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;' })
+        ]})
+    ]}));
+    secTam.appendChild(nomiCrearNodo('div', { css: 'display:flex;gap:6px;margin-top:6px;', hijos: [
+        nomiCrearNodo('button', { id: 'nomi-size-apply', css: 'padding:4px 12px;background:#4a6cf7;border:none;border-radius:6px;color:#fff;cursor:pointer;', texto: 'Aplicar' }),
+        nomiCrearNodo('button', { id: 'nomi-size-default', css: 'padding:4px 12px;background:#555;border:none;border-radius:6px;color:#fff;cursor:pointer;', texto: 'Predeterminado' })
+    ]}));
+
+    const secBusq = nomiCrearNodo('div', { css: 'margin-bottom:12px;' });
+    secBusq.appendChild(nomiCrearNodo('label', { css: 'display:flex;justify-content:space-between;align-items:center;font-size:14px;', hijos: [
+        document.createTextNode('🔍 Búsqueda web'),
+        nomiCrearNodo('input', { id: 'nomi-check-busqueda', marcado: NoMiState.busquedaWebActiva, deshabilitado: !credCargadas, atributos: { type: 'checkbox' } })
+    ]}));
+    secBusq.appendChild(nomiCrearNodo('div', { css: 'font-size:11px;color:#888;', texto: credCargadas ? 'Activa la búsqueda web automática (detección de palabras clave).' : 'Primero configura tus credenciales.' }));
+
+    const contenedor = nomiCrearNodo('div', { css: 'margin:10px 0;' });
+    contenedor.appendChild(lineaEspacio);
+    contenedor.appendChild(secOpen);
+    contenedor.appendChild(secMotor);
+    contenedor.appendChild(secDiag);
+    contenedor.appendChild(secNomi);
+    contenedor.appendChild(secUbi);
+    contenedor.appendChild(secLig);
+    contenedor.appendChild(secCtx);
+    contenedor.appendChild(secRes);
+    contenedor.appendChild(secTam);
+    contenedor.appendChild(secBusq);
+    contenedor.appendChild(nomiCrearNodo('button', { id: 'nomi-menu-restaurar', css: 'width:100%;padding:10px;background:#555;border:none;border-radius:10px;color:#fff;font-size:14px;cursor:pointer;margin-bottom:8px;', texto: '🔄 Restaurar posición' }));
+    contenedor.appendChild(nomiCrearNodo('button', { id: 'nomi-menu-limpiar', css: 'width:100%;padding:10px;background:#f55036;border:none;border-radius:10px;color:#fff;font-size:14px;cursor:pointer;margin-bottom:8px;', texto: '🗑️ Limpiar datos antiguos' }));
+    contenedor.appendChild(nomiCrearNodo('button', { id: 'nomi-menu-exportar-logs', css: 'width:100%;padding:10px;background:#4a6cf7;border:none;border-radius:10px;color:#fff;font-size:14px;cursor:pointer;margin-bottom:8px;', texto: '📤 Exportar logs de error' }));
+    contenedor.appendChild(nomiCrearNodo('button', { id: 'nomi-menu-eliminar-global', css: 'width:100%;padding:10px;background:#f55036;border:none;border-radius:10px;color:#fff;font-size:14px;cursor:pointer;margin-bottom:8px;', texto: '🗑️ Eliminar datos globales' }));
+    contenedor.appendChild(nomiCrearNodo('button', { id: 'nomi-menu-cerrar-sesion', css: 'width:100%;padding:10px;background:#f55036;border:none;border-radius:10px;color:#fff;font-size:14px;cursor:pointer;margin-bottom:8px;', texto: '🚪 Cerrar sesión' }));
+    contenedor.appendChild(nomiCrearNodo('button', { id: 'nomi-menu-cerrar', css: 'width:100%;padding:10px;background:none;border:none;color:#888;font-size:14px;cursor:pointer;', texto: 'Cerrar' }));
+
+    const pieAcerca = nomiCrearNodo('div', { css: 'margin-top:16px;padding-top:12px;border-top:1px solid #333;font-size:11px;color:#555;text-align:center;' });
+    pieAcerca.appendChild(document.createTextNode('ℹ️ Acerca de NoMi'));
+    pieAcerca.appendChild(document.createElement('br'));
+    pieAcerca.appendChild(document.createTextNode(`Asistente IA desarrollado por ${DISEÑADOR}`));
+    pieAcerca.appendChild(document.createElement('br'));
+    pieAcerca.appendChild(document.createTextNode('Powered by OpenRouter & Tavily'));
+    pieAcerca.appendChild(document.createElement('br'));
+    pieAcerca.appendChild(document.createTextNode(`Modelo: ${modeloActual}`));
+    pieAcerca.appendChild(document.createElement('br'));
+    pieAcerca.appendChild(document.createTextNode(`Versión: ${VERSION_SCRIPT} (${FECHA_LANZAMIENTO})`));
+    pieAcerca.appendChild(document.createElement('br'));
+    pieAcerca.appendChild(nomiCrearNodo('span', { css: 'color:#444;', texto: 'ℹ️ En páginas de configuración de Google (accounts.google.com), la burbuja puede no aparecer. Vuelva a la página anterior o recargue.' }));
+
+    menu.appendChild(nomiCrearNodo('h2', { css: 'color:#FF6B6B;margin-top:0;', texto: '⚙️ Configuración' }));
+    menu.appendChild(contenedor);
+    menu.appendChild(pieAcerca);
     document.body.appendChild(menu);
 
     document.getElementById('nomi-menu-cerrar').onclick = () => menu.remove();
@@ -223,7 +352,21 @@ function mostrarMenu() {
         const dialog = document.createElement('div');
         dialog.id = 'nomi-dialog-global';
         dialog.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#1a1a2e;border-radius:20px;padding:24px;z-index:99999999;color:#fff;border:1px solid #4a4a6a;box-shadow:0 8px 32px rgba(0,0,0,0.9);min-width:280px;max-width:90vw;max-height:80vh;overflow-y:auto;';
-        dialog.innerHTML = `<h3 style="color:#FF6B6B;margin-top:0;">🗑️ Eliminar datos globales</h3><p style="font-size:13px;color:#888;">Seleccione qué datos desea eliminar:</p><div style="margin:12px 0;">${['📁 Historiales de chat (todos los dominios)','⚙️ Configuración (contexto, modos)','📍 Ubicación guardada','📋 Logs de errores','📐 Tamaño y posición de ventana','📊 Estadísticas de tokens'].map((t,i) => `<label style="display:block;margin:6px 0;font-size:13px;"><input type="checkbox" id="nomi-del-${i}" checked> ${t}</label>`).join('')}</div><div style="display:flex;gap:8px;margin-top:16px;"><button id="nomi-dialog-confirmar" style="flex:1;padding:10px;background:#f55036;border:none;border-radius:10px;color:#fff;font-size:14px;cursor:pointer;">Eliminar seleccionados</button><button id="nomi-dialog-cancelar" style="flex:1;padding:10px;background:#333;border:none;border-radius:10px;color:#fff;font-size:14px;cursor:pointer;">Cancelar</button></div>`;
+        const opcionesGlobal = ['📁 Historiales de chat (todos los dominios)','⚙️ Configuración (contexto, modos)','📍 Ubicación guardada','📋 Logs de errores','📐 Tamaño y posición de ventana','📊 Estadísticas de tokens'];
+        dialog.appendChild(nomiCrearNodo('h3', { css: 'color:#FF6B6B;margin-top:0;', texto: '🗑️ Eliminar datos globales' }));
+        dialog.appendChild(nomiCrearNodo('p', { css: 'font-size:13px;color:#888;', texto: 'Seleccione qué datos desea eliminar:' }));
+        const cajaChecks = nomiCrearNodo('div', { css: 'margin:12px 0;' });
+        opcionesGlobal.forEach((t, i) => {
+            cajaChecks.appendChild(nomiCrearNodo('label', { css: 'display:block;margin:6px 0;font-size:13px;', hijos: [
+                nomiCrearNodo('input', { id: `nomi-del-${i}`, marcado: true, atributos: { type: 'checkbox' } }),
+                document.createTextNode(' ' + t)
+            ]}));
+        });
+        dialog.appendChild(cajaChecks);
+        dialog.appendChild(nomiCrearNodo('div', { css: 'display:flex;gap:8px;margin-top:16px;', hijos: [
+            nomiCrearNodo('button', { id: 'nomi-dialog-confirmar', css: 'flex:1;padding:10px;background:#f55036;border:none;border-radius:10px;color:#fff;font-size:14px;cursor:pointer;', texto: 'Eliminar seleccionados' }),
+            nomiCrearNodo('button', { id: 'nomi-dialog-cancelar', css: 'flex:1;padding:10px;background:#333;border:none;border-radius:10px;color:#fff;font-size:14px;cursor:pointer;', texto: 'Cancelar' })
+        ]}));
         document.body.appendChild(dialog);
         document.getElementById('nomi-dialog-cancelar').onclick = () => dialog.remove();
         document.getElementById('nomi-dialog-confirmar').onclick = () => {
@@ -349,12 +492,16 @@ async function cargarModelosAlMenu(force) {
             ? 'Limitado (429). Conserva el modelo actual.'
             : 'No se pudo cargar. Conserva el modelo actual.';
         const actual = getModelo() || MODELO_POR_DEFECTO;
-        select.innerHTML = `<option value="${actual}">${actual}</option>`;
+        nomiVaciarNodo(select);
+        const optActual = document.createElement('option');
+        optActual.value = actual;
+        optActual.textContent = actual;
+        select.appendChild(optActual);
         select.disabled = false;
         return;
     }
     const actual = getModelo() || MODELO_POR_DEFECTO;
-    select.innerHTML = '';
+    nomiVaciarNodo(select);
     lista.forEach(m => {
         const opt = document.createElement('option');
         opt.value = m.id;
@@ -388,7 +535,7 @@ async function cargarModelosNoMiAlMenu() {
         const cat = await obtenerCatalogoNoMi();
         const lista = (cat && cat.modelos || []).filter(m => m && m.proveedor === 'groq' && m.estado === 'activo');
         const actual = getNomiModelo() || NOMI_MODELO_POR_DEFECTO;
-        select.innerHTML = '';
+        nomiVaciarNodo(select);
         lista.forEach(m => {
             const opt = document.createElement('option');
             opt.value = m.id;
@@ -401,6 +548,10 @@ async function cargarModelosNoMiAlMenu() {
     } catch (e) {
         if (estado) estado.textContent = 'No se pudo cargar el catálogo.';
         const actual = getNomiModelo() || NOMI_MODELO_POR_DEFECTO;
-        select.innerHTML = `<option value="${actual}">${actual}</option>`;
+        nomiVaciarNodo(select);
+        const optActual = document.createElement('option');
+        optActual.value = actual;
+        optActual.textContent = actual;
+        select.appendChild(optActual);
     }
 }

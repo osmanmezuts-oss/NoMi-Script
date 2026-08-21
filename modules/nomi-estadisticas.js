@@ -25,24 +25,21 @@ function mostrarEstadisticas() {
     const espacioOcupado = calcularEspacioOcupado();
     const espacioFormateado = espacioOcupado > 1024 ? `${Math.round(espacioOcupado/1024)} KB` : `${espacioOcupado} B`;
     const logs = getValor(STORAGE_ERROR_LOGS, []);
-    div.innerHTML = `
-        <b style="font-size:14px;">📊 Estadísticas</b>
-        <div style="margin-top:10px; line-height:1.8;">
-            Preguntas: ${NoMiState.contadorPreguntas}<br>
-            Tokens totales: ${NoMiState.tokens.total}<br>
-            Tokens entrada: ${NoMiState.tokens.input}<br>
-            Tokens salida: ${NoMiState.tokens.output}<br>
-            Mensajes guardados: ${NoMiState.historial.length}<br>
-            Reinicio en: ${diasRestantes} días<br>
-            💾 Espacio: ${espacioFormateado}<br>
-            ${logs.length > 0 ? `📋 Errores registrados: ${logs.length}` : ''}
-            ${NoMiState.credencialesCargadas ? ' | ✅ Credenciales cargadas' : ' | ❌ Credenciales no configuradas'}
-        </div>
-        <div style="margin-top:8px; font-size:11px; color:#888; border-top:1px solid #333; padding-top:8px; max-height:80px; overflow-y:auto;">
-            🧠 Resumen: ${resumenPreview}
-        </div>
-        <button id="nomi-stats-close" style="margin-top:10px; background:#333; border:none; padding:6px 12px; border-radius:6px; color:#fff; cursor:pointer;">Cerrar</button>
-    `;
+    div.appendChild(nomiCrearNodo('b', { css: 'font-size:14px;', texto: '📊 Estadísticas' }));
+    const cuerpoStats = nomiCrearNodo('div', { css: 'margin-top:10px;line-height:1.8;' });
+    const lineaStats = (txt) => { cuerpoStats.appendChild(document.createTextNode(txt)); cuerpoStats.appendChild(document.createElement('br')); };
+    lineaStats(`Preguntas: ${NoMiState.contadorPreguntas}`);
+    lineaStats(`Tokens totales: ${NoMiState.tokens.total}`);
+    lineaStats(`Tokens entrada: ${NoMiState.tokens.input}`);
+    lineaStats(`Tokens salida: ${NoMiState.tokens.output}`);
+    lineaStats(`Mensajes guardados: ${NoMiState.historial.length}`);
+    lineaStats(`Reinicio en: ${diasRestantes} días`);
+    lineaStats(`💾 Espacio: ${espacioFormateado}`);
+    if (logs.length > 0) cuerpoStats.appendChild(document.createTextNode(`📋 Errores registrados: ${logs.length}`));
+    cuerpoStats.appendChild(document.createTextNode(NoMiState.credencialesCargadas ? ' | ✅ Credenciales cargadas' : ' | ❌ Credenciales no configuradas'));
+    div.appendChild(cuerpoStats);
+    div.appendChild(nomiCrearNodo('div', { css: 'margin-top:8px;font-size:11px;color:#888;border-top:1px solid #333;padding-top:8px;max-height:80px;overflow-y:auto;', texto: `🧠 Resumen: ${resumenPreview}` }));
+    div.appendChild(nomiCrearNodo('button', { id: 'nomi-stats-close', css: 'margin-top:10px;background:#333;border:none;padding:6px 12px;border-radius:6px;color:#fff;cursor:pointer;', texto: 'Cerrar' }));
     document.body.appendChild(div);
     document.getElementById('nomi-stats-close').onclick = () => div.remove();
 }
@@ -64,33 +61,29 @@ function mostrarExportacion() {
         z-index:9999998; border:1px solid #4a4a6a; max-width:280px; max-height:300px;
         overflow-y:auto; box-shadow:0 8px 32px rgba(0,0,0,0.8);
     `;
-    let html = `<b style="font-size:14px;">📤 Exportar Chat</b><div style="margin-top:10px;">`;
+    div.appendChild(nomiCrearNodo('b', { css: 'font-size:14px;', texto: '📤 Exportar Chat' }));
+    const listaExp = nomiCrearNodo('div', { css: 'margin-top:10px;' });
     if (fechas.length === 0) {
-        html += '<div style="color:#555;">No hay chats guardados.</div>';
+        listaExp.appendChild(nomiCrearNodo('div', { css: 'color:#555;', texto: 'No hay chats guardados.' }));
     } else {
         fechas.forEach(fecha => {
             const esHoy = fecha === new Date().toISOString().slice(0,10);
-            html += `
-                <div style="display:flex; justify-content:space-between; align-items:center; margin:4px 0;">
-                    <span style="color:${esHoy ? '#34a853' : '#ccc'}; font-weight:${esHoy ? 'bold' : 'normal'};">${fecha} ${esHoy ? '⭐ Hoy' : ''}</span>
-                    <div>
-                        <button data-fecha="${fecha}" data-formato="txt" style="background:#4a6cf7; border:none; padding:2px 8px; border-radius:4px; color:#fff; cursor:pointer; font-size:10px; margin-right:4px;">TXT</button>
-                        <button data-fecha="${fecha}" data-formato="json" style="background:#34a853; border:none; padding:2px 8px; border-radius:4px; color:#fff; cursor:pointer; font-size:10px;">JSON</button>
-                    </div>
-                </div>
-            `;
+            const filaExp = nomiCrearNodo('div', { css: 'display:flex;justify-content:space-between;align-items:center;margin:4px 0;' });
+            filaExp.appendChild(nomiCrearNodo('span', { css: `color:${esHoy ? '#34a853' : '#ccc'};font-weight:${esHoy ? 'bold' : 'normal'};`, texto: esHoy ? `${fecha} ⭐ Hoy` : fecha }));
+            const btnsExp = nomiCrearNodo('div');
+            const btnTxt = nomiCrearNodo('button', { atributos: { 'data-fecha': fecha, 'data-formato': 'txt' }, css: 'background:#4a6cf7;border:none;padding:2px 8px;border-radius:4px;color:#fff;cursor:pointer;font-size:10px;margin-right:4px;', texto: 'TXT' });
+            btnTxt.onclick = () => exportarChat(fecha, 'txt');
+            const btnJson = nomiCrearNodo('button', { atributos: { 'data-fecha': fecha, 'data-formato': 'json' }, css: 'background:#34a853;border:none;padding:2px 8px;border-radius:4px;color:#fff;cursor:pointer;font-size:10px;', texto: 'JSON' });
+            btnJson.onclick = () => exportarChat(fecha, 'json');
+            btnsExp.appendChild(btnTxt);
+            btnsExp.appendChild(btnJson);
+            filaExp.appendChild(btnsExp);
+            listaExp.appendChild(filaExp);
         });
     }
-    html += `</div><button id="nomi-export-close" style="margin-top:10px; background:#333; border:none; padding:6px 12px; border-radius:6px; color:#fff; cursor:pointer;">Cerrar</button>`;
-    div.innerHTML = html;
+    div.appendChild(listaExp);
+    div.appendChild(nomiCrearNodo('button', { id: 'nomi-export-close', css: 'margin-top:10px;background:#333;border:none;padding:6px 12px;border-radius:6px;color:#fff;cursor:pointer;', texto: 'Cerrar' }));
     document.body.appendChild(div);
-    div.querySelectorAll('button[data-fecha]').forEach(btn => {
-        btn.onclick = () => {
-            const fecha = btn.dataset.fecha;
-            const formato = btn.dataset.formato;
-            exportarChat(fecha, formato);
-        };
-    });
     document.getElementById('nomi-export-close').onclick = () => div.remove();
 }
 
