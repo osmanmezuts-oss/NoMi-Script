@@ -19,6 +19,7 @@ const fuentes = [
     leer('nomi-red.js'),
     leer('nomi-acceso-nomi.js'),
     leer('nomi-ui.js'),
+    leer('nomi-chat.js'),
     leer('nomi-core.js'),
 ];
 
@@ -331,6 +332,8 @@ hacerPeticion = async (url, opts) => {
     const __els = {
         'nomi-proveedor-display': { textContent: '', style: {} },
         'nomi-modelo-display': { textContent: '', style: {} },
+        'nomi-hud-status': { textContent: '', style: {} },
+        'nomi-hud-quota': { textContent: '', style: { display: 'none' } },
     };
     const __origGetElementById = document.getElementById.bind(document);
     // Reemplaza getElementById globalmente SOLO para los ids que capturamos.
@@ -363,12 +366,18 @@ hacerPeticion = async (url, opts) => {
     let llamadasWorker = 0, llamadasOpenRouter = 0;
     responder = async (url, opts) => {
         if (url.includes('/v1/chat')) { llamadasWorker++; return { ok: true, respuesta: 'respuesta NoMi' }; }
+        if (url.includes('/v1/usage')) return { periodo: '2026-08', cuota_mensual_invitado: 50, solicitudes_usadas: 2, bolsa_global_disponible: 999, tokens_usados: 10 };
         if (url.includes('openrouter') || url.includes('/chat/completions')) { llamadasOpenRouter++; return { choices: [{ message: { content: 'x' } }] }; }
         throw new Error('inesperado: ' + url);
     };
     await preguntar('hola en modo NoMi');
     assert.strictEqual(llamadasWorker, 1, 'flujo nomi: debe llamar al Worker /v1/chat');
     assert.strictEqual(llamadasOpenRouter, 0, 'flujo nomi: NUNCA debe llamar a OpenRouter');
+    // Tras respuesta exitosa, el HUD queda en "NoMi · Activo" y la cuota visible.
+    assert.strictEqual(__els['nomi-hud-status'].textContent, 'NoMi · Activo', 'tras respuesta NoMi el HUD debe decir Activo');
+    assert.strictEqual(__els['nomi-hud-quota'].style.display, 'inline', 'cuota visible tras obtener uso');
+    assert.ok(__els['nomi-hud-quota'].textContent.includes('10/50'), 'cuota muestra tokens/cuota: ' + __els['nomi-hud-quota'].textContent);
+    assert.ok(__els['nomi-hud-quota'].textContent.includes('Créditos'), 'cuota usa etiqueta Créditos (no solicitudes): ' + __els['nomi-hud-quota'].textContent);
 
     // 24) Flujo inverso OpenRouter intacto: al volver a OpenRouter el indicador muestra OpenRouter.
     setModoAcceso(MODO_ACCESO_OPENROUTER);
@@ -401,6 +410,227 @@ hacerPeticion = async (url, opts) => {
     actualizarIndicador();
     assert.strictEqual(__els['nomi-proveedor-display'].textContent, 'NoMi Worker / Groq',
         'indicador: tras cambiar a NoMi el proveedor se actualiza');
+
+    // ===== HUD de estado NoMi / Personal =====
+    // 26) HUD NoMi activo -> "NoMi · Activo".
+    setModoAcceso(MODO_ACCESO_NOMI);
+    setNomiToken('TOK123');
+    setNomiAccesoActivo(true);
+    NoMiState.isWaiting = false;
+    NoMiState.estadoHud = null;
+    establecerEstadoHud(null);
+    assert.strictEqual(__els['nomi-hud-status'].textContent, 'NoMi · Activo', 'HUD NoMi activo');
+
+    // 27) HUD NoMi sin acceso -> "NoMi · Sin acceso".
+    setNomiAccesoActivo(false);
+    establecerEstadoHud(null);
+    assert.strictEqual(__els['nomi-hud-status'].textContent, 'NoMi · Sin acceso', 'HUD NoMi sin acceso');
+
+    // 28) HUD Personal (OpenRouter) activo -> "Personal · Activo".
+    setModoAcceso(MODO_ACCESO_OPENROUTER);
+    NoMiState.credencialesCargadas = true;
+    NoMiState.apiKeyActual = 'sk-or-test';
+    establecerEstadoHud(null);
+    assert.strictEqual(__els['nomi-hud-status'].textContent, 'Personal · Activo', 'HUD Personal activo');
+
+    // 29) Durante el envío (isWaiting) -> "Pensando…".
+    NoMiState.isWaiting = true;
+    actualizarHud();
+    assert.strictEqual(__els['nomi-hud-status'].textContent, 'Pensando…', 'HUD pensando');
+    NoMiState.isWaiting = false;
+
+    // 30) consultarUsoNoMi exitoso pinta cuota (tokens/cuota) y NO la bolsa global.
+    setModoAcceso(MODO_ACCESO_NOMI);
+    setNomiToken('TOK123');
+    setNomiAccesoActivo(true);
+    NoMiState.usoNoMi = null;
+    establecerEstadoHud(null);
+    responder = async (url) => {
+        if (url.includes('/v1/usage')) return { periodo: '2026-08', cuota_mensual_invitado: 50, solicitudes_usadas: 7, bolsa_global_disponible: 999, tokens_usados: 1234 };
+        throw new Error('inesperado: ' + url);
+    };
+    await consultarUsoNoMi();
+    assert.strictEqual(__els['nomi-hud-status'].textContent, 'NoMi · Activo', 'tras usage: NoMi Activo');
+    assert.ok(__els['nomi-hud-quota'].textContent.includes('1234/50'), 'cuota muestra tokens/cuota: ' + __els['nomi-hud-quota'].textContent);
+    assert.ok(__els['nomi-hud-quota'].textContent.includes('Créditos'), 'cuota usa etiqueta Créditos: ' + __els['nomi-hud-quota'].textContent);
+    assert.ok(!__els['nomi-hud-quota'].textContent.includes('999'), 'NO debe mostrar bolsa global');
+    assert.strictEqual(__els['nomi-hud-quota'].style.display, 'inline', 'cuota visible en NoMi');
+
+    // 31) 401 en /v1/usage -> "Acceso no válido", acceso inactivo, limpia reintento.
+    setNomiAccesoActivo(true);
+    NoMiState.reintentarPregunta = 'x';
+    responder = async (url) => { if (url.includes('/v1/usage')) { const e = new Error('401'); e.status = 401; throw e; } throw new Error('inesperado'); };
+    await consultarUsoNoMi();
+    assert.strictEqual(__els['nomi-hud-status'].textContent, 'Acceso no válido', 'HUD 401');
+    assert.strictEqual(getNomiAccesoActivo(), false, '401 marca acceso inactivo');
+    assert.strictEqual(NoMiState.reintentarPregunta, '', '401 limpia reintento (no reusa token revocado)');
+
+    // 32) 429 -> "Límite alcanzado".
+    establecerEstadoHud(null);
+    setNomiAccesoActivo(true);
+    responder = async (url) => { if (url.includes('/v1/usage')) { const e = new Error('429'); e.status = 429; throw e; } throw new Error('inesperado'); };
+    await consultarUsoNoMi();
+    assert.strictEqual(__els['nomi-hud-status'].textContent, 'Límite alcanzado', 'HUD 429');
+
+    // 33) 503 -> "Capacidad limitada".
+    establecerEstadoHud(null);
+    responder = async (url) => { if (url.includes('/v1/usage')) { const e = new Error('503'); e.status = 503; throw e; } throw new Error('inesperado'); };
+    await consultarUsoNoMi();
+    assert.strictEqual(__els['nomi-hud-status'].textContent, 'Capacidad limitada', 'HUD 503');
+
+    // 34) Fallo de red (sin status) -> "No se pudo conectar" y conserva reintento.
+    establecerEstadoHud(null);
+    NoMiState.reintentarPregunta = 'pregunta fallida';
+    responder = async (url) => { if (url.includes('/v1/usage')) { throw new Error('network'); } throw new Error('inesperado'); };
+    await consultarUsoNoMi();
+    assert.strictEqual(__els['nomi-hud-status'].textContent, 'No se pudo conectar', 'HUD red');
+    assert.strictEqual(NoMiState.reintentarPregunta, 'pregunta fallida', 'rede conserva la pregunta para reintento');
+
+    // 35) mapearErrorHudNoMi en chat (NoMiTokenInvalidoError) -> "Acceso no válido".
+    setNomiAccesoActivo(true);
+    establecerEstadoHud(null);
+    mapearErrorHudNoMi(new NoMiTokenInvalidoError('revocado'));
+    assert.strictEqual(__els['nomi-hud-status'].textContent, 'Acceso no válido', 'chat 401');
+    assert.strictEqual(getNomiAccesoActivo(), false, 'chat 401 inactivo');
+
+    // 36) Aislamiento: en modo Personal, consultarUsoNoMi NO consulta el Worker ni muestra cuota.
+    setModoAcceso(MODO_ACCESO_OPENROUTER);
+    NoMiState.usoNoMi = { solicitudes_usadas: 3 };
+    establecerEstadoHud(null);
+    let llamadasUso = 0;
+    responder = async (url) => { if (url.includes('/v1/usage')) { llamadasUso++; throw new Error('no debio llamar'); } throw new Error('inesperado'); };
+    await consultarUsoNoMi();
+    assert.strictEqual(llamadasUso, 0, 'Personal no debe consultar /v1/usage');
+    assert.strictEqual(__els['nomi-hud-quota'].style.display, 'none', 'cuota oculta en Personal');
+    assert.strictEqual(__els['nomi-hud-status'].textContent, 'Personal · Activo', 'HUD Personal tras aislamiento');
+
+    // 37) Reintento explícito: tras error de red, preguntar() reenvía al Worker.
+    setModoAcceso(MODO_ACCESO_NOMI);
+    setNomiToken('TOK123');
+    setNomiAccesoActivo(true);
+    establecerEstadoHud('sin_conexion');
+    NoMiState.reintentarPregunta = 'REINTENTO_MARCADOR';
+    NoMiState.isWaiting = false;
+    NoMiState.historial = [];
+    let llamadasWorker2 = 0;
+    responder = async (url, opts) => {
+        if (url.includes('/v1/chat')) { llamadasWorker2++; return { ok: true, respuesta: 'ok retry' }; }
+        if (url.includes('/v1/usage')) return { solicitudes_usadas: 1, cuota_mensual_invitado: 50 };
+        throw new Error('inesperado: ' + url);
+    };
+    await preguntar(NoMiState.reintentarPregunta);
+    assert.strictEqual(llamadasWorker2, 1, 'reintento reenvia al Worker /v1/chat');
+
+    // 38) Aislamiento al cambiar de modo: limpia estadoHud y cuota obsoleta.
+    setModoAcceso(MODO_ACCESO_NOMI);
+    setNomiToken('TOK123');
+    setNomiAccesoActivo(true);
+    establecerEstadoHud('limite');
+    NoMiState.usoNoMi = { tokens_usados: 30, cuota_mensual_invitado: 50 };
+    actualizarQuotaHud();
+    assert.strictEqual(__els['nomi-hud-quota'].style.display, 'inline', 'cuota visible en NoMi antes del cambio');
+    // Cambio a Personal (misma secuencia del handler del menú).
+    setModoAcceso(MODO_ACCESO_OPENROUTER);
+    NoMiState.usoNoMi = null;
+    establecerEstadoHud(null);
+    actualizarQuotaHud();
+    assert.strictEqual(__els['nomi-hud-quota'].style.display, 'none', 'Personal oculta cuota obsoleta de NoMi');
+    assert.strictEqual(__els['nomi-hud-status'].textContent, 'Personal · Activo', 'Personal no hereda limite de NoMi');
+    NoMiState.credencialesCargadas = false; NoMiState.apiKeyActual = '';
+    establecerEstadoHud(null);
+    assert.strictEqual(__els['nomi-hud-status'].textContent, 'Personal · Sin acceso', 'Personal sin acceso (no hereda estado NoMi)');
+
+    // 39) Reintento seguro: fallo de chat red guarda la pregunta y no duplica historial.
+    setModoAcceso(MODO_ACCESO_NOMI);
+    setNomiToken('TOK123');
+    setNomiAccesoActivo(true);
+    NoMiState.historial = [];
+    NoMiState.reintentarPregunta = '';
+    establecerEstadoHud(null);
+    let llamadasChat = 0;
+    responder = async (url, opts) => {
+        if (url.includes('/v1/chat')) { llamadasChat++; const e = new Error('network'); e.status = 0; throw e; }
+        if (url.includes('/v1/usage')) return { tokens_usados: 1, cuota_mensual_invitado: 50 };
+        throw new Error('inesperado: ' + url);
+    };
+    await preguntar('PREGUNTA_RED_MARCADOR');
+    assert.strictEqual(llamadasChat, 1, 'chat NoMi intentado 1 vez');
+    assert.strictEqual(NoMiState.estadoHud, 'sin_conexion', 'fallo de red -> sin_conexion');
+    assert.strictEqual(NoMiState.reintentarPregunta, 'PREGUNTA_RED_MARCADOR', 'reintento guarda la pregunta fallida');
+    assert.strictEqual(NoMiState.historial.length, 0, 'historial NO duplicado tras fallo (se hizo pop)');
+    // Reintento explícito reenvía y, al responder, limpia reintentarPregunta.
+    responder = async (url, opts) => {
+        if (url.includes('/v1/chat')) { llamadasChat++; return { ok: true, respuesta: 'ok' }; }
+        if (url.includes('/v1/usage')) return { tokens_usados: 2, cuota_mensual_invitado: 50 };
+        throw new Error('inesperado: ' + url);
+    };
+    await preguntar(NoMiState.reintentarPregunta);
+    assert.strictEqual(llamadasChat, 2, 'reintento reenvia el chat');
+    assert.strictEqual(NoMiState.reintentarPregunta, '', 'tras respuesta exitosa se limpia reintentarPregunta');
+    assert.strictEqual(NoMiState.historial.length, 2, 'historial: 1 usuario + 1 asistente (sin duplicar)');
+
+    // 40) Fallo solo de /v1/usage tras respuesta exitosa: HUD conexión, sin reenviar.
+    setModoAcceso(MODO_ACCESO_NOMI);
+    setNomiToken('TOK123');
+    setNomiAccesoActivo(true);
+    NoMiState.historial = [];
+    NoMiState.reintentarPregunta = '';
+    establecerEstadoHud(null);
+    let llamadasChat2 = 0, llamadasUso2 = 0;
+    responder = async (url, opts) => {
+        if (url.includes('/v1/chat')) { llamadasChat2++; return { ok: true, respuesta: 'ok' }; }
+        if (url.includes('/v1/usage')) { llamadasUso2++; const e = new Error('network'); e.status = 0; throw e; }
+        throw new Error('inesperado: ' + url);
+    };
+    await preguntar('PREGUNTA_OK');
+    assert.strictEqual(llamadasChat2, 1, 'chat respondio 1 vez');
+    assert.strictEqual(llamadasUso2, 1, 'usage consultado tras respuesta');
+    assert.strictEqual(NoMiState.reintentarPregunta, '', 'respuesta exitosa limpia reintentarPregunta');
+    assert.strictEqual(NoMiState.estadoHud, 'sin_conexion', 'fallo de usage informa conexion');
+    assert.strictEqual(NoMiState.historial.length, 2, 'no se reenvia ni duplica historial');
+
+    // 41) Errores NoMi: un único mensaje humano, sin error crudo ni duplicado.
+    setModoAcceso(MODO_ACCESO_NOMI);
+    setNomiToken('TOK123');
+    setNomiAccesoActivo(true);
+    NoMiState.historial = [];
+    let mensajesBot = [];
+    const _agregar = agregarMensaje;
+    agregarMensaje = (quien, texto) => { if (quien === 'bot') mensajesBot.push(texto); };
+    // 401
+    let llamadas41 = 0;
+    responder = async (url) => { if (url.includes('/v1/chat')) { llamadas41++; const e = new Error('401'); e.status = 401; throw e; } throw new Error('inesperado'); };
+    await preguntar('PREG_401');
+    assert.strictEqual(mensajesBot.length, 1, '401: un único mensaje (sin duplicado)');
+    assert.ok(mensajesBot[0].includes('inválido') || mensajesBot[0].includes('revocado'), '401: mensaje humano');
+    assert.ok(!mensajesBot[0].includes('❌'), '401: sin prefijo crudo ❌');
+    assert.ok(!mensajesBot[0].includes('401'), '401: sin código técnico en el chat');
+    mensajesBot = [];
+    setNomiAccesoActivo(true);
+    // 429
+    responder = async (url) => { if (url.includes('/v1/chat')) { llamadas41++; const e = new Error('429'); e.status = 429; throw e; } throw new Error('inesperado'); };
+    await preguntar('PREG_429');
+    assert.strictEqual(mensajesBot.length, 1, '429: un único mensaje');
+    assert.ok(mensajesBot[0].toLowerCase().includes('límite'), '429: mensaje humano de límite');
+    assert.ok(!mensajesBot[0].includes('❌'), '429: sin prefijo crudo ❌');
+    mensajesBot = [];
+    setNomiAccesoActivo(true);
+    // 503
+    responder = async (url) => { if (url.includes('/v1/chat')) { llamadas41++; const e = new Error('503'); e.status = 503; throw e; } throw new Error('inesperado'); };
+    await preguntar('PREG_503');
+    assert.strictEqual(mensajesBot.length, 1, '503: un único mensaje');
+    assert.ok(mensajesBot[0].toLowerCase().includes('capacidad'), '503: mensaje humano de capacidad');
+    assert.ok(!mensajesBot[0].includes('❌'), '503: sin prefijo crudo ❌');
+    mensajesBot = [];
+    setNomiAccesoActivo(true);
+    // red (sin status)
+    responder = async (url) => { if (url.includes('/v1/chat')) { llamadas41++; const e = new Error('network'); throw e; } throw new Error('inesperado'); };
+    await preguntar('PREG_RED');
+    assert.strictEqual(mensajesBot.length, 1, 'red: un único mensaje');
+    assert.ok(mensajesBot[0].includes('conectar') || mensajesBot[0].includes('Reintentar'), 'red: mensaje humano de conexión');
+    assert.ok(!mensajesBot[0].includes('❌'), 'red: sin prefijo crudo ❌');
+    assert.strictEqual(NoMiState.reintentarPregunta, 'PREG_RED', 'red: guarda pregunta para Reintentar');
+    agregarMensaje = _agregar;
 
     console.log('OK: todas las pruebas de acceso NoMi pasaron');
 })().catch((e) => { console.error('FALLO:', e && e.message); throw e; });

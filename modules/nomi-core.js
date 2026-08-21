@@ -86,6 +86,8 @@ function iniciarAsistente() {
     crearVentanaChat();
     // Fija el indicador superior según el modo persistido (NoMi/OpenRouter).
     actualizarIndicador();
+    actualizarHud();
+    actualizarQuotaHud();
     configurarTeclado();
 
     // Aviso único al inicio sobre el diagnóstico técnico (no se repite).
@@ -159,7 +161,8 @@ async function preguntar(texto) {
     if (texto.trim() === '!cmd' || texto.trim() === '!comandos') { mostrarAyuda(); return; }
 
     NoMiState.isWaiting = true;
-    document.getElementById('nomi-modelo-display').textContent = '⏳ pensando...';
+    deshabilitarControlesEnvio();
+    actualizarHud();
 
     if (NoMiState.ubicacionActivada && NoMiState.ubicacionActual) {
         if (Date.now() - NoMiState.ubicacionActual.timestamp > UBICACION_EXPIRACION) actualizarUbicacion(true);
@@ -183,10 +186,12 @@ async function preguntar(texto) {
     }
     if (esBusqueda && consulta) {
         ocultarCargando();
-        document.getElementById('nomi-modelo-display').textContent = NoMiState.modeloActual;
+        actualizarIndicadorModelo();
         await procesarBusqueda(consulta);
         if (NoMiState.busquedaWebTemporal) { NoMiState.busquedaWebTemporal = false; }
+        restaurarControlesEnvio();
         NoMiState.isWaiting = false;
+        actualizarHud();
         return;
     }
 
@@ -231,9 +236,6 @@ async function preguntar(texto) {
     guardarHistorial(NoMiState.historial);
     agregarMensaje('yo', texto);
 
-    const enviar = document.getElementById('nomi-enviar');
-    if (input) input.disabled = true;
-    if (enviar) enviar.disabled = true;
     mostrarCargando();
 
     try {
@@ -276,10 +278,9 @@ async function preguntar(texto) {
                 guardarHistorial(NoMiState.historial);
                 document.getElementById('nomi-modelo-display').textContent = '⚠️ error';
                 registrarError('api', respuesta.error.message || 'Error desconocido en API', `Modelo: ${NoMiState.modeloActual}`);
-                if (input) input.disabled = false;
-                if (enviar) enviar.disabled = false;
-                if (input) input.focus();
+                restaurarControlesEnvio();
                 NoMiState.isWaiting = false;
+                actualizarHud();
                 return;
             } else {
                 agregarMensaje('bot', '❌ Error inesperado');
@@ -287,10 +288,9 @@ async function preguntar(texto) {
                 guardarHistorial(NoMiState.historial);
                 document.getElementById('nomi-modelo-display').textContent = '⚠️ error';
                 registrarError('script', 'Respuesta inesperada de la API', 'Sin detalles');
-                if (input) input.disabled = false;
-                if (enviar) enviar.disabled = false;
-                if (input) input.focus();
+                restaurarControlesEnvio();
                 NoMiState.isWaiting = false;
+                actualizarHud();
                 return;
             }
         }
@@ -301,22 +301,33 @@ async function preguntar(texto) {
         NoMiState.historial.push({role: 'assistant', content: respuestaTexto});
         guardarHistorial(NoMiState.historial);
         agregarMensaje('bot', respuestaTexto);
+        NoMiState.reintentarPregunta = '';
         actualizarStats();
+        // NoMi: tras respuesta exitosa, refresca cuota y limpia estado de error.
+        if (NoMiState.modoAcceso === MODO_ACCESO_NOMI) await consultarUsoNoMi();
         if (NoMiState.modoResumenActivo && NoMiState.contextoSeleccionado === 10) {
             setTimeout(() => generarResumen(NoMiState.historial), 100);
         }
     } catch (error) {
         ocultarCargando();
-        agregarMensaje('bot', '❌ ' + error.message);
         NoMiState.historial.pop();
         guardarHistorial(NoMiState.historial);
         document.getElementById('nomi-modelo-display').textContent = '⚠️ error';
-        registrarError('network', error.message, `Modo: ${NoMiState.modoAcceso}, URL: ${NoMiState.urlBaseActual}`);
+        if (NoMiState.modoAcceso === MODO_ACCESO_NOMI) {
+            // Error NoMi: un único mensaje humano; el detalle técnico queda solo
+            // en registrarError(). La pregunta se guarda para reintento explícito.
+            NoMiState.reintentarPregunta = texto;
+            agregarMensaje('bot', mensajeHumanoErrorNoMi(error));
+            mapearErrorHudNoMi(error);
+            registrarError('network', error.message, `Modo: NoMi, URL: ${NoMiState.nomiWorkerUrl}`);
+        } else {
+            agregarMensaje('bot', '❌ ' + error.message);
+            registrarError('network', error.message, `Modo: ${NoMiState.modoAcceso}, URL: ${NoMiState.urlBaseActual}`);
+        }
     }
-    if (input) input.disabled = false;
-    if (enviar) enviar.disabled = false;
-    if (input) input.focus();
+    restaurarControlesEnvio();
     NoMiState.isWaiting = false;
+    actualizarHud();
 }
 
 async function generarResumen(historialCompleto) {

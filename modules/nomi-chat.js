@@ -67,10 +67,33 @@ function actualizarContextoIndicador() {
 function actualizarStats() {
     const counter = document.getElementById('nomi-token-counter');
     if (counter) counter.textContent = NoMiState.tokens.total;
-    const modelDisplay = document.getElementById('nomi-modelo-display');
-    if (modelDisplay) modelDisplay.textContent = NoMiState.modeloActual;
+    // El modelo mostrado respeta el proveedor activo: NoMi NO debe ser
+    // sobrescrito por el modelo Personal (OpenRouter).
+    actualizarIndicadorModelo();
     actualizarContextoIndicador();
     actualizarBarraUbicacion();
+}
+
+// Deshabilita los controles de envío (input, enviar y búsqueda) durante un
+// envío. Se restauran SIEMPRE con restaurarControlesEnvio().
+function deshabilitarControlesEnvio() {
+    const input = document.getElementById('nomi-input');
+    const enviar = document.getElementById('nomi-enviar');
+    const buscar = document.getElementById('nomi-search-btn');
+    if (input) input.disabled = true;
+    if (enviar) enviar.disabled = true;
+    if (buscar) buscar.disabled = true;
+}
+
+// Restaura los controles de envío (input, enviar y búsqueda) y devuelve el
+// foco al input. Se llama en todas las salidas de preguntar().
+function restaurarControlesEnvio() {
+    const input = document.getElementById('nomi-input');
+    const enviar = document.getElementById('nomi-enviar');
+    const buscar = document.getElementById('nomi-search-btn');
+    if (input) { input.disabled = false; input.focus(); }
+    if (enviar) enviar.disabled = false;
+    if (buscar) buscar.disabled = false;
 }
 
 function mostrarCargando() {
@@ -117,6 +140,9 @@ function toggleVentana(mostrar) {
     if (NoMiState.ventanaAbierta) {
         document.getElementById('nomi-input').focus();
         cargarHistorial();
+        // Al abrir el chat, NoMi consulta el uso una vez (sin polling).
+        actualizarHud();
+        if (NoMiState.modoAcceso === MODO_ACCESO_NOMI && NoMiState.nomiToken) consultarUsoNoMi();
     }
 }
 

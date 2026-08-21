@@ -39,5 +39,11 @@ window.NoMiState = {
     nomiWorkerUrl: NOMI_WORKER_URL_POR_DEFECTO,
     nomiToken: '',
     nomiModelo: NOMI_MODELO_POR_DEFECTO,
-    nomiAccesoActivo: false
+    nomiAccesoActivo: false,
+    // ===== Estado transitorio del HUD (NO se persiste) =====
+    // estadoHud: null (calculado desde el acceso) | 'acceso_invalido' |
+    // 'limite' | 'capacidad' | 'sin_conexion'. El "Pensando…" se deriva de isWaiting.
+    estadoHud: null,
+    usoNoMi: null,
+    reintentarPregunta: ''
 };

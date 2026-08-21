@@ -282,6 +282,11 @@ function mostrarMenu() {
         if (sec) sec.style.display = m === 'nomi' ? 'block' : 'none';
         alternarSeccionOpenRouter();
         actualizarIndicador();
+        // Al cambiar de modo se limpia el estado HUD transitorio y la cuota
+        // obsoleta (nunca se hereda límite/acceso inválido/capacidad de NoMi a Personal).
+        NoMiState.usoNoMi = null;
+        establecerEstadoHud(null);
+        actualizarQuotaHud();
         mostrarNotificacionTemporal(`🌐 Modo de acceso: ${m === 'nomi' ? 'Acceso compartido NoMi' : 'OpenRouter + Tavily'}`);
     };
     const activarNoMiBtn = document.getElementById('nomi-activar-acceso');
@@ -303,6 +308,8 @@ function mostrarMenu() {
             if (est) est.textContent = '✅ Activo';
             mostrarNotificacionTemporal('✅ Acceso NoMi activado. Ya puedes chatear.');
             cargarModelosNoMiAlMenu();
+            establecerEstadoHud(null);
+            consultarUsoNoMi();
         } catch (err) {
             mostrarNotificacionTemporal('❌ ' + err.message);
         } finally {

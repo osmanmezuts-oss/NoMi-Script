@@ -184,6 +184,110 @@ const pruebas = `
     // El texto del modelo se renderiza (antes venía en innerHTML).
     assert.strictEqual(document.getElementById('nomi-modelo-display').textContent, NoMiState.modeloActual, 'modelo-display debe mostrar el modelo actual');
 
+    // 1b) HUD de estado: existe y refleja modo/estado; cuota solo en NoMi sin bolsa global.
+    assert.ok(document.getElementById('nomi-hud-status'), 'falta #nomi-hud-status');
+    assert.ok(document.getElementById('nomi-hud-quota'), 'falta #nomi-hud-quota');
+    NoMiState.modoAcceso = MODO_ACCESO_OPENROUTER;
+    NoMiState.credencialesCargadas = true;
+    NoMiState.apiKeyActual = 'sk-or';
+    NoMiState.nomiAccesoActivo = false;
+    NoMiState.isWaiting = false;
+    NoMiState.estadoHud = null;
+    actualizarHud();
+    assert.strictEqual(document.getElementById('nomi-hud-status').textContent, 'Personal · Activo', 'HUD Personal activo');
+    NoMiState.isWaiting = true; actualizarHud();
+    assert.strictEqual(document.getElementById('nomi-hud-status').textContent, 'Pensando…', 'HUD pensando');
+    NoMiState.isWaiting = false;
+    NoMiState.estadoHud = 'limite'; actualizarHud();
+    assert.strictEqual(document.getElementById('nomi-hud-status').textContent, 'Límite alcanzado', 'HUD limite');
+    NoMiState.estadoHud = null;
+    NoMiState.modoAcceso = MODO_ACCESO_NOMI;
+    // Rama Créditos: tokens_usados/cuota_mensual_invitado (créditos/tokens).
+    NoMiState.usoNoMi = { tokens_usados: 12, cuota_mensual_invitado: 50, solicitudes_usadas: 5, bolsa_global_disponible: 999 };
+    actualizarQuotaHud();
+    const q = document.getElementById('nomi-hud-quota');
+    assert.strictEqual(q.style.display, 'inline', 'cuota visible en NoMi');
+    assert.ok(q.textContent.includes('12/50'), 'cuota tokens/cuota: ' + q.textContent);
+    assert.ok(q.textContent.includes('Créditos'), 'cuota usa etiqueta Créditos: ' + q.textContent);
+    assert.ok(!q.textContent.includes('999'), 'no muestra bolsa global');
+    // Rama fallback: sin tokens_usados -> solo "Consultas usadas: N".
+    NoMiState.usoNoMi = { solicitudes_usadas: 3 };
+    actualizarQuotaHud();
+    assert.ok(q.textContent.includes('Consultas usadas: 3'), 'fallback muestra Consultas usadas: ' + q.textContent);
+    assert.ok(!q.textContent.includes('/'), 'fallback no muestra ratio de cuota');
+    NoMiState.modoAcceso = MODO_ACCESO_OPENROUTER;
+    NoMiState.usoNoMi = { solicitudes_usadas: 3 };
+    actualizarQuotaHud();
+    assert.strictEqual(document.getElementById('nomi-hud-quota').style.display, 'none', 'cuota oculta en Personal');
+
+    // 1c) Acción del HUD (click) según estado.
+    const hud = document.getElementById('nomi-hud-status');
+    assert.ok(hud && typeof hud.onclick === 'function', 'HUD debe tener handler de click');
+    let llamadasHud = {};
+    const _preg = typeof preguntar !== 'undefined' ? preguntar : null;
+    const _menu = typeof mostrarMenu !== 'undefined' ? mostrarMenu : null;
+    const _uso = typeof consultarUsoNoMi !== 'undefined' ? consultarUsoNoMi : null;
+    preguntar = (p) => { llamadasHud.preguntar = p; };
+    mostrarMenu = () => { llamadasHud.menu = true; };
+    consultarUsoNoMi = () => { llamadasHud.usage = true; };
+    const btn = document.getElementById('nomi-hud-accion');
+    assert.ok(btn, 'debe existir #nomi-hud-accion');
+    // Normal: botón oculto.
+    NoMiState.modoAcceso = MODO_ACCESO_NOMI;
+    NoMiState.nomiAccesoActivo = true;
+    NoMiState.estadoHud = null;
+    NoMiState.reintentarPregunta = '';
+    actualizarHud();
+    assert.strictEqual(btn.style.display, 'none', 'normal: botón oculto');
+    // 401 / sin acceso -> "Activar" abre Configuración, no reenvía.
+    NoMiState.estadoHud = 'acceso_invalido';
+    actualizarHud();
+    assert.strictEqual(btn.style.display, 'inline-block', 'acceso_invalido: botón visible');
+    assert.strictEqual(btn.textContent, 'Activar', 'acceso_invalido: botón Activar');
+    btn.onclick();
+    assert.strictEqual(llamadasHud.menu, true, 'Activar abre Configuración');
+    assert.strictEqual(llamadasHud.preguntar, undefined, 'Activar no reenvía');
+    llamadasHud = {};
+    hud.onclick();
+    assert.strictEqual(llamadasHud.menu, true, 'click HUD en acceso_invalido abre Configuración');
+    // sin_conexion + pregunta -> "Reintentar" reenvía.
+    llamadasHud = {};
+    NoMiState.nomiAccesoActivo = true;
+    NoMiState.estadoHud = 'sin_conexion';
+    NoMiState.reintentarPregunta = 'REINTENTO_X';
+    actualizarHud();
+    assert.strictEqual(btn.textContent, 'Reintentar', 'sin_conexion+pregunta: botón Reintentar');
+    btn.onclick();
+    assert.strictEqual(llamadasHud.preguntar, 'REINTENTO_X', 'Reintentar reenvía la pregunta');
+    llamadasHud = {};
+    NoMiState.reintentarPregunta = 'REINTENTO_X';
+    hud.onclick();
+    assert.strictEqual(llamadasHud.preguntar, 'REINTENTO_X', 'click HUD reenvía la pregunta');
+    // sin_conexion sin pregunta (solo falló usage) -> "Actualizar" refresca usage.
+    llamadasHud = {};
+    NoMiState.estadoHud = 'sin_conexion';
+    NoMiState.reintentarPregunta = '';
+    actualizarHud();
+    assert.strictEqual(btn.textContent, 'Actualizar', 'sin_conexion sin pregunta: botón Actualizar');
+    btn.onclick();
+    assert.strictEqual(llamadasHud.usage, true, 'Actualizar refresca usage');
+    assert.strictEqual(llamadasHud.preguntar, undefined, 'Actualizar no reenvía chat');
+    llamadasHud = {};
+    hud.onclick();
+    assert.strictEqual(llamadasHud.usage, true, 'click HUD refresca usage');
+    // Personal -> ni botón ni acciones NoMi.
+    llamadasHud = {};
+    NoMiState.modoAcceso = MODO_ACCESO_OPENROUTER;
+    NoMiState.estadoHud = 'sin_conexion';
+    actualizarHud();
+    assert.strictEqual(btn.style.display, 'none', 'Personal: botón oculto');
+    hud.onclick();
+    assert.strictEqual(llamadasHud.preguntar, undefined, 'Personal: click no reenvía');
+    assert.strictEqual(llamadasHud.usage, undefined, 'Personal: click no refresca NoMi');
+    if (_preg) preguntar = _preg;
+    if (_menu) mostrarMenu = _menu;
+    if (_uso) consultarUsoNoMi = _uso;
+
     // 2) agregarMensaje renderiza como texto (sin HTML) y conserva nombre en <b>.
     const body = document.getElementById('nomi-chat-body');
     body.children = [];

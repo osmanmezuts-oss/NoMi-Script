@@ -133,7 +133,9 @@ function crearVentanaChat() {
         nomiCrearNodo('div', { css: 'display:flex;align-items:center;gap:8px;', hijos: [
             nomiCrearNodo('b', { css: 'font-size:13px;color:#FF6B6B;', texto: NOMBRE_ASISTENTE }),
             nomiCrearNodo('span', { id: 'nomi-proveedor-display', css: 'font-size:9px;color:#36c5f0;font-weight:bold;' }),
-            nomiCrearNodo('span', { id: 'nomi-modelo-display', css: 'font-size:9px;color:#888;', texto: NoMiState.modeloActual })
+            nomiCrearNodo('span', { id: 'nomi-modelo-display', css: 'font-size:9px;color:#888;', texto: NoMiState.modeloActual }),
+            nomiCrearNodo('span', { id: 'nomi-hud-status', css: 'font-size:9px;font-weight:bold;color:#888;cursor:default;padding:1px 6px;border-radius:8px;background:#00000033;' }),
+            nomiCrearNodo('button', { id: 'nomi-hud-accion', css: 'display:none;margin-left:6px;background:#4a6cf7;border:none;border-radius:8px;padding:1px 8px;color:#fff;font-size:9px;cursor:pointer;', texto: '' })
         ]}),
         nomiCrearNodo('div', { hijos: [
             nomiCrearNodo('button', { id: 'nomi-web-btn', css: 'background:none;border:1px solid #555;border-radius:6px;padding:2px 8px;color:#888;font-size:12px;cursor:pointer;margin-right:4px;', texto: '🌐' }),
@@ -146,7 +148,8 @@ function crearVentanaChat() {
 
     const filaCtx = nomiCrearNodo('div', { css: 'display:flex;justify-content:space-between;font-size:9px;color:#555;flex-shrink:0;margin-bottom:4px;', hijos: [
         nomiCrearNodo('span', { id: 'nomi-contexto-indicador', texto: `📚 Contexto: ${NoMiState.contextoSeleccionado} mensajes` }),
-        nomiCrearNodo('span', { id: 'nomi-web-status', css: 'display:none;color:#34a853;', texto: '🌐 Web activo' })
+        nomiCrearNodo('span', { id: 'nomi-web-status', css: 'display:none;color:#34a853;', texto: '🌐 Web activo' }),
+        nomiCrearNodo('span', { id: 'nomi-hud-quota', css: 'display:none;color:#36c5f0;' })
     ]});
     win.appendChild(filaCtx);
 
@@ -272,6 +275,22 @@ function crearVentanaChat() {
     document.getElementById('nomi-export-btn').onclick = () => mostrarExportacion();
     document.getElementById('nomi-menu-btn').onclick = () => mostrarMenu();
 
+    const hudStatus = document.getElementById('nomi-hud-status');
+    if (hudStatus) hudStatus.onclick = () => {
+        if (NoMiState.modoAcceso !== MODO_ACCESO_NOMI) return;
+        if (NoMiState.estadoHud === 'acceso_invalido' || !NoMiState.nomiAccesoActivo) {
+            mostrarMenu();
+            return;
+        }
+        if (NoMiState.estadoHud === 'sin_conexion' && NoMiState.reintentarPregunta) {
+            const p = NoMiState.reintentarPregunta;
+            NoMiState.reintentarPregunta = '';
+            preguntar(p);
+            return;
+        }
+        consultarUsoNoMi();
+    };
+
     actualizarContextoIndicador();
     actualizarStats();
     actualizarBarraUbicacion();
@@ -303,5 +322,154 @@ function actualizarIndicadorModelo() {
 function actualizarIndicador() {
     actualizarIndicadorProveedor();
     actualizarIndicadorModelo();
+}
+
+// ======== HUD de estado NoMi / Personal ========
+// Estado transitorio centralizado en NoMiState (sin persistencia). El HUD
+// muestra siempre modo + estado; el modelo se muestra aparte (ver
+// actualizarIndicadorModelo). La cuota solo se muestra en modo NoMi tras
+// obtener uso real del Worker; NUNCA se exponen bolsa global, IDs ni detalles
+// técnicos del endpoint.
+
+// Devuelve { texto, color } según el estado actual (sin tocar el DOM).
+function calcularTextoHud() {
+    if (NoMiState.isWaiting) return { texto: 'Pensando…', color: '#f5a623' };
+    const e = NoMiState.estadoHud;
+    if (e === 'acceso_invalido') return { texto: 'Acceso no válido', color: '#ff4d4d' };
+    if (e === 'limite') return { texto: 'Límite alcanzado', color: '#ff4d4d' };
+    if (e === 'capacidad') return { texto: 'Capacidad limitada', color: '#ffa500' };
+    if (e === 'sin_conexion') return { texto: 'No se pudo conectar', color: '#ff4d4d' };
+    if (NoMiState.modoAcceso === MODO_ACCESO_NOMI) {
+        if (NoMiState.nomiToken && NoMiState.nomiAccesoActivo) return { texto: 'NoMi · Activo', color: '#34a853' };
+        return { texto: 'NoMi · Sin acceso', color: '#ffa500' };
+    }
+    if (NoMiState.credencialesCargadas && NoMiState.apiKeyActual) return { texto: 'Personal · Activo', color: '#34a853' };
+    return { texto: 'Personal · Sin acceso', color: '#ffa500' };
+}
+
+// Pinta el texto/color del HUD. Si no hay DOM (stubs de test) no hace nada.
+function actualizarHud() {
+    const el = document.getElementById('nomi-hud-status');
+    if (!el) return;
+    const { texto, color } = calcularTextoHud();
+    el.textContent = texto;
+    el.style.color = color;
+    el.style.cursor = NoMiState.modoAcceso === MODO_ACCESO_NOMI && (NoMiState.estadoHud || !NoMiState.nomiAccesoActivo) ? 'pointer' : 'default';
+    actualizarBotonAccionHud();
+}
+
+// Botón de acción contextual junto al HUD (oculto en estado normal).
+// 401/sin acceso -> "Activar" abre Configuración.
+// sin conexión + pregunta fallida -> "Reintentar" reenvía esa pregunta.
+// sin conexión solo por /v1/usage -> "Actualizar" consulta usage (sin reenviar).
+function actualizarBotonAccionHud() {
+    const btn = document.getElementById('nomi-hud-accion');
+    if (!btn) return;
+    const esNoMi = NoMiState.modoAcceso === MODO_ACCESO_NOMI;
+    let texto = '', accion = null;
+    if (esNoMi) {
+        if (NoMiState.estadoHud === 'acceso_invalido' || !NoMiState.nomiAccesoActivo) {
+            texto = 'Activar'; accion = () => mostrarMenu();
+        } else if (NoMiState.estadoHud === 'sin_conexion' && NoMiState.reintentarPregunta) {
+            texto = 'Reintentar';
+            accion = () => { const p = NoMiState.reintentarPregunta; NoMiState.reintentarPregunta = ''; preguntar(p); };
+        } else if (NoMiState.estadoHud === 'sin_conexion' && !NoMiState.reintentarPregunta) {
+            texto = 'Actualizar'; accion = () => consultarUsoNoMi();
+        }
+    }
+    if (accion) {
+        btn.textContent = texto;
+        btn.onclick = accion;
+        btn.style.display = 'inline-block';
+    } else {
+        btn.style.display = 'none';
+        btn.onclick = null;
+    }
+}
+
+// Fija el estado explícito del HUD (null = calcular desde el acceso).
+// Recibe: null | 'acceso_invalido' | 'limite' | 'capacidad' | 'sin_conexion'.
+function establecerEstadoHud(estado) {
+    NoMiState.estadoHud = estado;
+    actualizarHud();
+}
+
+// Muestra la cuota en modo NoMi tras obtener uso. Nunca bolsa global ni IDs.
+// Contrato real de /v1/usage: cuota_mensual_invitado y tokens_usados son
+// créditos/tokens; solicitudes_usadas es el número de solicitudes.
+function actualizarQuotaHud() {
+    const el = document.getElementById('nomi-hud-quota');
+    if (!el) return;
+    const u = NoMiState.usoNoMi;
+    if (NoMiState.modoAcceso !== MODO_ACCESO_NOMI || !u || typeof u !== 'object') {
+        el.style.display = 'none';
+        return;
+    }
+    const tokens = Number(u.tokens_usados);
+    const cuota = Number(u.cuota_mensual_invitado);
+    if (Number.isFinite(tokens) && Number.isFinite(cuota) && cuota > 0) {
+        el.textContent = `Créditos: ${tokens}/${cuota} este mes`;
+        el.style.display = 'inline';
+        return;
+    }
+    const solicitudes = Number(u.solicitudes_usadas);
+    if (Number.isFinite(solicitudes)) {
+        el.textContent = `Consultas usadas: ${solicitudes}`;
+        el.style.display = 'inline';
+        return;
+    }
+    el.style.display = 'none';
+}
+
+// Consulta /v1/usage (NoMi) al abrir chat, tras activación y tras respuesta
+// exitosa. Sin polling. Actualiza cuota y refleja errores en el HUD.
+async function consultarUsoNoMi() {
+    if (NoMiState.modoAcceso !== MODO_ACCESO_NOMI || !NoMiState.nomiToken) {
+        NoMiState.usoNoMi = null;
+        actualizarQuotaHud();
+        return;
+    }
+    const base = nomiWorkerBase();
+    try {
+        const datos = await hacerPeticion(base + '/v1/usage', {
+            method: 'GET',
+            headers: { 'Authorization': 'Bearer ' + NoMiState.nomiToken, 'Accept': 'application/json' }
+        });
+        NoMiState.usoNoMi = (datos && typeof datos === 'object') ? datos : null;
+        establecerEstadoHud(null);
+        actualizarQuotaHud();
+    } catch (err) {
+        mapearErrorHudNoMi(err);
+    }
+}
+
+// Mensaje humano único para errores NoMi (401/429/503/red). El detalle
+// técnico se conserva solo en registrarError().
+function mensajeHumanoErrorNoMi(err) {
+    const status = err && typeof err.status === 'number' ? err.status : null;
+    if (status === 401 || err instanceof NoMiTokenInvalidoError) {
+        return '🔑 Tu acceso NoMi es inválido o fue revocado. Ábrelo en ⚙️ Configuración > Acceso compartido NoMi para reactivarlo.';
+    }
+    if (status === 429) return '⏳ Alcanzaste el límite de uso de NoMi. Intenta de nuevo más tarde.';
+    if (status === 503) return '🚧 NoMi tiene capacidad limitada ahora mismo. Intenta de nuevo más tarde.';
+    return '📡 No se pudo conectar con NoMi. Pulsa “Reintentar” en el indicador para volver a intentarlo.';
+}
+
+// Mapea un error de red/Worker NoMi a un estado de HUD (401/429/503/red).
+// 401 conserva el token pero marca el acceso inactivo. No agrega mensajes de
+// chat (eso lo hace preguntar() con mensajeHumanoErrorNoMi).
+function mapearErrorHudNoMi(err) {
+    const status = err && typeof err.status === 'number' ? err.status : null;
+    if (status === 401 || err instanceof NoMiTokenInvalidoError) {
+        setNomiAccesoActivo(false);
+        NoMiState.reintentarPregunta = '';
+        establecerEstadoHud('acceso_invalido');
+    } else if (status === 429) {
+        establecerEstadoHud('limite');
+    } else if (status === 503) {
+        establecerEstadoHud('capacidad');
+    } else {
+        establecerEstadoHud('sin_conexion');
+    }
 }
 
