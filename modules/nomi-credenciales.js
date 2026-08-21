@@ -17,7 +17,7 @@ function importarCredenciales() {
 
             try {
                 const json = JSON.parse(texto);
-                if (json.openrouter && json.tavily) {
+                if (json.openrouter) {
                     credenciales = json;
                     mostrarNotificacionTemporal('📄 Archivo JSON plano importado.');
                 }
@@ -43,7 +43,7 @@ function importarCredenciales() {
                     for (const metodo of metodosHex) {
                         try {
                             const resultado = await metodo.fn();
-                            if (resultado && resultado.openrouter && resultado.tavily) {
+                            if (resultado && resultado.openrouter) {
                                 credenciales = resultado;
                                 mostrarNotificacionTemporal(`🔐 Descifrado con ${metodo.nombre}`);
                                 break;
@@ -73,7 +73,7 @@ function importarCredenciales() {
                     for (const metodo of metodosBase64) {
                         try {
                             const resultado = await metodo.fn();
-                            if (resultado && resultado.openrouter && resultado.tavily) {
+                            if (resultado && resultado.openrouter) {
                                 credenciales = resultado;
                                 mostrarNotificacionTemporal(`🔐 Descifrado con ${metodo.nombre}`);
                                 break;
@@ -101,7 +101,7 @@ function importarCredenciales() {
                 for (const metodo of metodosRaw) {
                     try {
                         const resultado = await metodo.fn();
-                        if (resultado && resultado.openrouter && resultado.tavily) {
+                if (resultado && resultado.openrouter) {
                             credenciales = resultado;
                             mostrarNotificacionTemporal(`🔐 Descifrado con ${metodo.nombre}`);
                             break;
@@ -127,16 +127,7 @@ function importarCredenciales() {
                 throw new Error('No se pudo descifrar el archivo con ningún método.' + resumen);
             }
 
-            setApiKey(credenciales.openrouter);
-            setTavilyKey(credenciales.tavily);
-            if (credenciales.modelo) setModelo(credenciales.modelo);
-            if (credenciales.url) setUrlBase(credenciales.url);
-            setCredencialesCargadas(true);
-            setConfigInicial(true);
-            NoMiState.apiKeyActual = credenciales.openrouter;
-            NoMiState.tavilyKeyActual = credenciales.tavily;
-            NoMiState.modeloActual = getModelo();
-            NoMiState.urlBaseActual = getUrlBase();
+            aplicarCredencialesImportadas(credenciales);
 
             mostrarNotificacionTemporal('✅ Credenciales importadas correctamente.');
             const asistente = document.getElementById('nomi-asistente-config');
@@ -152,21 +143,50 @@ function importarCredenciales() {
 }
 
 function guardarCredencialesManual(apiKey, tavilyKey, modelo, urlBase) {
-    if (!apiKey || !tavilyKey) {
-        mostrarNotificacionTemporal('❌ Debes ingresar ambas claves (OpenRouter y Tavily).');
+    // La API key es obligatoria (cualquier proveedor OpenAI-compatible).
+    // Tavily es OPCIONAL: la búsqueda web funciona solo si se proporciona;
+    // el chat normal funciona sin ella. Retrocompatible con OpenRouter+Tavily.
+    if (!apiKey) {
+        mostrarNotificacionTemporal('❌ Debes ingresar al menos la API key de tu API Personal.');
         return false;
     }
     setApiKey(apiKey);
-    setTavilyKey(tavilyKey);
+    // Tavily opcional: se guarda si se ingresó; si se deja vacío se ELIMINA
+    // explícitamente la clave previa (no queda una cadena vacía suelta).
+    if (tavilyKey) setTavilyKey(tavilyKey);
+    else {
+        setTavilyKey('');
+        eliminarValor(STORAGE_TAVILY_KEY);
+    }
     if (modelo) setModelo(modelo);
     if (urlBase) setUrlBase(urlBase);
     setCredencialesCargadas(true);
     setConfigInicial(true);
     NoMiState.apiKeyActual = apiKey;
-    NoMiState.tavilyKeyActual = tavilyKey;
+    NoMiState.tavilyKeyActual = getTavilyKey();
     NoMiState.modeloActual = getModelo();
     NoMiState.urlBaseActual = getUrlBase();
     mostrarNotificacionTemporal('✅ Credenciales guardadas correctamente.');
     return true;
+}
+
+// Aplica un conjunto de credenciales importado (JSON/.enc). Tavily es opcional:
+// si el archivo NO trae campo tavily, se ELIMINA la Tavily previa. Retrocompatible
+// con configuraciones completas OpenRouter+Tavily (se conservan todas las claves).
+function aplicarCredencialesImportadas(credenciales) {
+    setApiKey(credenciales.openrouter);
+    if (credenciales.tavily) setTavilyKey(credenciales.tavily);
+    else {
+        setTavilyKey('');
+        eliminarValor(STORAGE_TAVILY_KEY);
+    }
+    if (credenciales.modelo) setModelo(credenciales.modelo);
+    if (credenciales.url) setUrlBase(credenciales.url);
+    setCredencialesCargadas(true);
+    setConfigInicial(true);
+    NoMiState.apiKeyActual = credenciales.openrouter;
+    NoMiState.tavilyKeyActual = getTavilyKey();
+    NoMiState.modeloActual = getModelo();
+    NoMiState.urlBaseActual = getUrlBase();
 }
 

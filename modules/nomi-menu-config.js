@@ -30,27 +30,31 @@ function mostrarMenu() {
     lineaEspacio.appendChild(document.createTextNode(credCargadas ? ' | ✅ Credenciales cargadas' : ' | ❌ Credenciales no configuradas'));
 
     const secOpen = nomiCrearNodo('div', { id: 'nomi-seccion-openrouter', css: 'margin-bottom:16px;padding:12px;background:#0d0d1a;border-radius:12px;border:1px solid #333;' + (NoMiState.modoAcceso === 'nomi' ? 'opacity:0.5;pointer-events:none;' : '') });
-    secOpen.appendChild(nomiCrearNodo('h3', { css: 'color:#4a6cf7;margin:0 0 8px 0;font-size:14px;', texto: '🔑 Credenciales' }));
+    secOpen.appendChild(nomiCrearNodo('h3', { css: 'color:#4a6cf7;margin:0 0 8px 0;font-size:14px;', texto: '🔑 API Personal' }));
     if (NoMiState.modoAcceso === 'nomi') {
-        secOpen.appendChild(nomiCrearNodo('div', { clase: 'nomi-openrouter-aviso', css: 'font-size:10px;color:#f5a623;margin-bottom:6px;font-weight:bold;', texto: 'Solo disponible en modo OpenRouter. Cambia el modo de acceso para usarlas.' }));
+        secOpen.appendChild(nomiCrearNodo('div', { clase: 'nomi-openrouter-aviso', css: 'font-size:10px;color:#f5a623;margin-bottom:6px;font-weight:bold;', texto: 'Solo disponible en modo API Personal. Cambia el modo de acceso para usarlas.' }));
     }
     const filaOR = nomiCrearNodo('div', { css: 'margin-bottom:8px;' });
-    filaOR.appendChild(nomiCrearNodo('label', { css: 'font-size:12px;color:#888;display:block;margin-bottom:2px;', texto: 'OpenRouter API Key' }));
+    filaOR.appendChild(nomiCrearNodo('label', { css: 'font-size:12px;color:#888;display:block;margin-bottom:2px;', texto: 'API Key (API Personal)' }));
     filaOR.appendChild(nomiCrearNodo('input', { id: 'nomi-input-openrouter', valor: apiKeyActual, atributos: { type: 'password' }, css: 'width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;' }));
     secOpen.appendChild(filaOR);
     const filaTav = nomiCrearNodo('div', { css: 'margin-bottom:8px;' });
-    filaTav.appendChild(nomiCrearNodo('label', { css: 'font-size:12px;color:#888;display:block;margin-bottom:2px;', texto: 'Tavily API Key' }));
+    filaTav.appendChild(nomiCrearNodo('label', { css: 'font-size:12px;color:#888;display:block;margin-bottom:2px;', texto: 'Tavily API Key (opcional)' }));
     filaTav.appendChild(nomiCrearNodo('input', { id: 'nomi-input-tavily', valor: tavilyKeyActual, atributos: { type: 'password' }, css: 'width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;' }));
-    filaTav.appendChild(nomiCrearNodo('div', { css: 'font-size:9px;color:#555;margin-top:2px;', texto: 'Si no tienes, obtén una gratis en tavily.com' }));
+    filaTav.appendChild(nomiCrearNodo('div', { css: 'font-size:9px;color:#555;margin-top:2px;', texto: 'Opcional: solo para búsqueda web. Si no tienes, obtén una gratis en tavily.com' }));
     secOpen.appendChild(filaTav);
     const filaModeloMenu = nomiCrearNodo('div', { css: 'margin-bottom:8px;' });
-    filaModeloMenu.appendChild(nomiCrearNodo('label', { css: 'font-size:12px;color:#888;display:block;margin-bottom:2px;', texto: 'Modelo gratuito' }));
-    filaModeloMenu.appendChild(nomiCrearNodo('select', { id: 'nomi-input-modelo', css: 'width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;' }));
+    filaModeloMenu.appendChild(nomiCrearNodo('label', { css: 'font-size:12px;color:#888;display:block;margin-bottom:2px;', texto: 'Modelo' }));
+    // OpenRouter: selector poblado por el catálogo. Otra API: campo manual.
+    const selModeloMenu = nomiCrearNodo('select', { id: 'nomi-input-modelo', css: 'width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;' });
+    const inputModeloManual = nomiCrearNodo('input', { id: 'nomi-input-modelo-manual', valor: modeloActual, atributos: { type: 'text', placeholder: 'p. ej. gpt-4o-mini' }, css: 'width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;display:none;' });
+    filaModeloMenu.appendChild(selModeloMenu);
+    filaModeloMenu.appendChild(inputModeloManual);
     filaModeloMenu.appendChild(nomiCrearNodo('div', { css: 'display:flex;gap:4px;align-items:center;margin-top:4px;', hijos: [
         nomiCrearNodo('button', { id: 'nomi-actualizar-modelos', css: 'flex:1;padding:4px 6px;background:#3a4a6a;border:none;border-radius:6px;color:#fff;font-size:10px;cursor:pointer;', texto: 'Actualizar' }),
         nomiCrearNodo('span', { id: 'nomi-estado-modelo', css: 'font-size:9px;color:#aaa;' })
     ]}));
-    filaModeloMenu.appendChild(nomiCrearNodo('div', { css: 'font-size:9px;color:#888;margin-top:4px;', texto: 'Lista ordenada por latencia estimada de OpenRouter. Menor número = menor latencia estimada según OpenRouter.' }));
+    filaModeloMenu.appendChild(nomiCrearNodo('div', { id: 'nomi-nota-modelo', css: 'font-size:9px;color:#888;margin-top:4px;', texto: 'En OpenRouter se lista por latencia estimada. En otra API compatible, escribe el modelo manualmente.' }));
     secOpen.appendChild(filaModeloMenu);
     const filaUrl = nomiCrearNodo('div', { css: 'margin-bottom:8px;' });
     filaUrl.appendChild(nomiCrearNodo('label', { css: 'font-size:12px;color:#888;display:block;margin-bottom:2px;', texto: 'URL Base' }));
@@ -233,7 +237,7 @@ function mostrarMenu() {
     pieAcerca.appendChild(document.createElement('br'));
     pieAcerca.appendChild(document.createTextNode(`Asistente IA desarrollado por ${DISEÑADOR}`));
     pieAcerca.appendChild(document.createElement('br'));
-    pieAcerca.appendChild(document.createTextNode('Powered by OpenRouter & Tavily'));
+    pieAcerca.appendChild(document.createTextNode('Powered by API Personal (OpenAI-compatible)'));
     pieAcerca.appendChild(document.createElement('br'));
     pieAcerca.appendChild(document.createTextNode(`Modelo: ${modeloActual}`));
     pieAcerca.appendChild(document.createElement('br'));
@@ -250,8 +254,12 @@ function mostrarMenu() {
     document.getElementById('nomi-guardar-creds').onclick = () => {
         const apiKey = document.getElementById('nomi-input-openrouter').value.trim();
         const tavilyKey = document.getElementById('nomi-input-tavily').value.trim();
-        const modelo = document.getElementById('nomi-input-modelo').value.trim() || MODELO_POR_DEFECTO;
         const urlBase = document.getElementById('nomi-input-url').value.trim() || URL_BASE_POR_DEFECTO;
+        // El modelo se toma del selector (OpenRouter) o del campo manual (otra API).
+        const esOR = esOpenRouter(urlBase);
+        const modelo = esOR
+            ? (document.getElementById('nomi-input-modelo').value.trim() || MODELO_POR_DEFECTO)
+            : (document.getElementById('nomi-input-modelo-manual').value.trim() || MODELO_POR_DEFECTO);
         if (guardarCredencialesManual(apiKey, tavilyKey, modelo, urlBase)) {
             const modelDisplay = document.getElementById('nomi-modelo-display');
             if (modelDisplay) modelDisplay.textContent = NoMiState.modeloActual;
@@ -261,7 +269,22 @@ function mostrarMenu() {
         }
         };
 
-    // ---- Selector guiado de modelo gratuito ----
+    // ---- Visibilidad del campo Modelo según la URL ----
+    // OpenRouter: selector poblado por el catálogo. Otra API compatible: campo manual.
+    const actualizarVisibilidadModelo = () => {
+        const url = (document.getElementById('nomi-input-url') && document.getElementById('nomi-input-url').value.trim()) || getUrlBase() || URL_BASE_POR_DEFECTO;
+        const esOR = esOpenRouter(url);
+        const sel = document.getElementById('nomi-input-modelo');
+        const inp = document.getElementById('nomi-input-modelo-manual');
+        const btn = document.getElementById('nomi-actualizar-modelos');
+        if (!sel || !inp) return;
+        sel.style.display = esOR ? 'block' : 'none';
+        inp.style.display = esOR ? 'none' : 'block';
+        if (btn) btn.style.display = esOR ? 'flex' : 'none';
+        if (!esOR && !inp.value) inp.value = getModelo() || MODELO_POR_DEFECTO;
+    };
+
+    // ---- Selector guiado de modelo (OpenRouter) ----
     // Cambiar el modelo es siempre explícito del usuario: aquí sólo reacciona al <select>.
     document.getElementById('nomi-input-modelo').addEventListener('change', () => {
         const sel = document.getElementById('nomi-input-modelo');
@@ -272,8 +295,18 @@ function mostrarMenu() {
         const display = document.getElementById('nomi-modelo-display');
         if (display) display.textContent = NoMiState.modeloActual;
     });
+    // Campo manual (otra API): persiste el modelo escrito sin consultar catálogo.
+    const inpManual = document.getElementById('nomi-input-modelo-manual');
+    if (inpManual) inpManual.addEventListener('input', () => {
+        const v = inpManual.value.trim();
+        if (v) setModelo(v);
+    });
+    // Al cambiar la URL base, se reevalúa si es OpenRouter y se muestra el control adecuado.
+    const urlInput = document.getElementById('nomi-input-url');
+    if (urlInput) urlInput.addEventListener('change', () => { actualizarVisibilidadModelo(); cargarModelosAlMenu(); });
     document.getElementById('nomi-actualizar-modelos').onclick = () => cargarModelosAlMenu(true);
     // Puebla el selector al abrir el menú (el caché de sessionStorage evita consultas repetidas).
+    actualizarVisibilidadModelo();
     cargarModelosAlMenu();
 
     document.getElementById('nomi-importar-creds-menu').onclick = () => { importarCredenciales(); menu.remove(); };
@@ -293,9 +326,9 @@ function mostrarMenu() {
         const esNoMi = NoMiState.modoAcceso === MODO_ACCESO_NOMI;
         sec.style.opacity = esNoMi ? '0.5' : '1';
         sec.style.pointerEvents = esNoMi ? 'none' : 'auto';
-        // Añade/quita el aviso "Solo disponible en modo OpenRouter".
+        // Añade/quita el aviso "Solo disponible en modo API Personal".
         let aviso = sec.querySelector('.nomi-openrouter-aviso');
-        const texto = 'Solo disponible en modo OpenRouter. Cambia el modo de acceso para usarlas.';
+        const texto = 'Solo disponible en modo API Personal. Cambia el modo de acceso para usarlas.';
         if (esNoMi) {
             if (!aviso) {
                 aviso = document.createElement('div');
@@ -527,6 +560,15 @@ async function cargarModelosAlMenu(force) {
     const select = document.getElementById('nomi-input-modelo');
     const estado = document.getElementById('nomi-estado-modelo');
     if (!select) return;
+    // El catálogo de modelos gratuitos SOLO se consulta si la URL es OpenRouter.
+    // En otra API compatible se conserva el modelo manual sin intentar catálogo.
+    const url = (document.getElementById('nomi-input-url') && document.getElementById('nomi-input-url').value.trim()) || getUrlBase() || URL_BASE_POR_DEFECTO;
+    if (!esOpenRouter(url)) {
+        if (estado) estado.textContent = 'API propia: usa el modelo manual.';
+        const inp = document.getElementById('nomi-input-modelo-manual');
+        if (inp && !inp.value) inp.value = getModelo() || MODELO_POR_DEFECTO;
+        return;
+    }
     estado.textContent = 'Cargando…';
     select.disabled = true;
     let lista = [];

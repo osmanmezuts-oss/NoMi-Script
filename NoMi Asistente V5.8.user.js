@@ -103,6 +103,34 @@ const NOMI_MODELO_POR_DEFECTO = 'openai/gpt-oss-20b';
 // Etiquetas legibles del proveedor activo para el indicador superior.
 const PROVEEDOR_NOMI_LABEL = 'NoMi Worker / Groq';
 const PROVEEDOR_OPENROUTER_LABEL = 'OpenRouter';
+// "API Personal" es la capa OpenAI-compatible que puede apuntar a OpenRouter
+// u otro proveedor (DeepSeek, Groq, Mistral, Together, etc.). El catálogo de
+// modelos gratuitos y los headers HTTP-Referer/X-Title solo aplican a OpenRouter.
+// Detección segura por hostname real: solo openrouter.ai y sus subdominios
+// (*.openrouter.ai). Dominios falsos (openrouter.ai.evil.com, evil.com/.../openrouter.ai)
+// o URLs inválidas devuelven false (fallback seguro vía try/catch).
+function esOpenRouter(url) {
+    if (typeof url !== 'string' || !url) return false;
+    try {
+        const host = new URL(url).hostname;
+        return host === 'openrouter.ai' || host.endsWith('.openrouter.ai');
+    } catch (e) {
+        return false;
+    }
+}
+// Construye los headers del Chat Personal (OpenAI-compatible). Los headers
+// HTTP-Referer y X-Title se envían SOLO a OpenRouter; en otra URL no se envían.
+function construirHeadersPersonal(apiKey, urlBase) {
+    const headers = {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + (apiKey || '')
+    };
+    if (esOpenRouter(urlBase)) {
+        headers['HTTP-Referer'] = (typeof window !== 'undefined' && window.location && window.location.href) || '';
+        headers['X-Title'] = 'NoMi Asistente';
+    }
+    return headers;
+}
 const NOMI_PERSONA_SISTEMA = 'Eres NoMi, un asistente profesional y formal pero cercano. Responde con claridad, respeto y precisión. Evita el tuteo excesivo y mantén un tono de colaboración entre iguales. El usuario espera respuestas útiles, concisas y bien estructuradas.';
 
 const STORAGE_MODO_ACCESO = 'nomi_modo_acceso';
@@ -1593,7 +1621,7 @@ function importarCredenciales() {
 
             try {
                 const json = JSON.parse(texto);
-                if (json.openrouter && json.tavily) {
+                if (json.openrouter) {
                     credenciales = json;
                     mostrarNotificacionTemporal('📄 Archivo JSON plano importado.');
                 }
@@ -1619,7 +1647,7 @@ function importarCredenciales() {
                     for (const metodo of metodosHex) {
                         try {
                             const resultado = await metodo.fn();
-                            if (resultado && resultado.openrouter && resultado.tavily) {
+                            if (resultado && resultado.openrouter) {
                                 credenciales = resultado;
                                 mostrarNotificacionTemporal(`🔐 Descifrado con ${metodo.nombre}`);
                                 break;
@@ -1649,7 +1677,7 @@ function importarCredenciales() {
                     for (const metodo of metodosBase64) {
                         try {
                             const resultado = await metodo.fn();
-                            if (resultado && resultado.openrouter && resultado.tavily) {
+                            if (resultado && resultado.openrouter) {
                                 credenciales = resultado;
                                 mostrarNotificacionTemporal(`🔐 Descifrado con ${metodo.nombre}`);
                                 break;
@@ -1677,7 +1705,7 @@ function importarCredenciales() {
                 for (const metodo of metodosRaw) {
                     try {
                         const resultado = await metodo.fn();
-                        if (resultado && resultado.openrouter && resultado.tavily) {
+                if (resultado && resultado.openrouter) {
                             credenciales = resultado;
                             mostrarNotificacionTemporal(`🔐 Descifrado con ${metodo.nombre}`);
                             break;
@@ -1703,16 +1731,7 @@ function importarCredenciales() {
                 throw new Error('No se pudo descifrar el archivo con ningún método.' + resumen);
             }
 
-            setApiKey(credenciales.openrouter);
-            setTavilyKey(credenciales.tavily);
-            if (credenciales.modelo) setModelo(credenciales.modelo);
-            if (credenciales.url) setUrlBase(credenciales.url);
-            setCredencialesCargadas(true);
-            setConfigInicial(true);
-            NoMiState.apiKeyActual = credenciales.openrouter;
-            NoMiState.tavilyKeyActual = credenciales.tavily;
-            NoMiState.modeloActual = getModelo();
-            NoMiState.urlBaseActual = getUrlBase();
+            aplicarCredencialesImportadas(credenciales);
 
             mostrarNotificacionTemporal('✅ Credenciales importadas correctamente.');
             const asistente = document.getElementById('nomi-asistente-config');
@@ -1728,22 +1747,51 @@ function importarCredenciales() {
 }
 
 function guardarCredencialesManual(apiKey, tavilyKey, modelo, urlBase) {
-    if (!apiKey || !tavilyKey) {
-        mostrarNotificacionTemporal('❌ Debes ingresar ambas claves (OpenRouter y Tavily).');
+    // La API key es obligatoria (cualquier proveedor OpenAI-compatible).
+    // Tavily es OPCIONAL: la búsqueda web funciona solo si se proporciona;
+    // el chat normal funciona sin ella. Retrocompatible con OpenRouter+Tavily.
+    if (!apiKey) {
+        mostrarNotificacionTemporal('❌ Debes ingresar al menos la API key de tu API Personal.');
         return false;
     }
     setApiKey(apiKey);
-    setTavilyKey(tavilyKey);
+    // Tavily opcional: se guarda si se ingresó; si se deja vacío se ELIMINA
+    // explícitamente la clave previa (no queda una cadena vacía suelta).
+    if (tavilyKey) setTavilyKey(tavilyKey);
+    else {
+        setTavilyKey('');
+        eliminarValor(STORAGE_TAVILY_KEY);
+    }
     if (modelo) setModelo(modelo);
     if (urlBase) setUrlBase(urlBase);
     setCredencialesCargadas(true);
     setConfigInicial(true);
     NoMiState.apiKeyActual = apiKey;
-    NoMiState.tavilyKeyActual = tavilyKey;
+    NoMiState.tavilyKeyActual = getTavilyKey();
     NoMiState.modeloActual = getModelo();
     NoMiState.urlBaseActual = getUrlBase();
     mostrarNotificacionTemporal('✅ Credenciales guardadas correctamente.');
     return true;
+}
+
+// Aplica un conjunto de credenciales importado (JSON/.enc). Tavily es opcional:
+// si el archivo NO trae campo tavily, se ELIMINA la Tavily previa. Retrocompatible
+// con configuraciones completas OpenRouter+Tavily (se conservan todas las claves).
+function aplicarCredencialesImportadas(credenciales) {
+    setApiKey(credenciales.openrouter);
+    if (credenciales.tavily) setTavilyKey(credenciales.tavily);
+    else {
+        setTavilyKey('');
+        eliminarValor(STORAGE_TAVILY_KEY);
+    }
+    if (credenciales.modelo) setModelo(credenciales.modelo);
+    if (credenciales.url) setUrlBase(credenciales.url);
+    setCredencialesCargadas(true);
+    setConfigInicial(true);
+    NoMiState.apiKeyActual = credenciales.openrouter;
+    NoMiState.tavilyKeyActual = getTavilyKey();
+    NoMiState.modeloActual = getModelo();
+    NoMiState.urlBaseActual = getUrlBase();
 }
 
 // ======== MODULO: nomi-ubicacion.js (bundle) ========
@@ -2377,25 +2425,28 @@ function mostrarAsistenteConfiguracion() {
     subCaja.appendChild(nomiCrearNodo('p', { css: 'color:#888;font-size:12px;margin-bottom:8px;', texto: '✏️ O ingresa tus claves manualmente:' }));
 
     const filaOpenrouter = nomiCrearNodo('div', { css: 'margin-bottom:8px;' });
-    filaOpenrouter.appendChild(nomiCrearNodo('label', { css: 'font-size:11px;color:#888;display:block;margin-bottom:2px;', texto: 'OpenRouter API Key *' }));
+    filaOpenrouter.appendChild(nomiCrearNodo('label', { css: 'font-size:11px;color:#888;display:block;margin-bottom:2px;', texto: 'API Key (API Personal) *' }));
     filaOpenrouter.appendChild(nomiCrearNodo('input', { id: 'nomi-config-openrouter', atributos: { type: 'password', placeholder: 'sk-or-v1-...' }, css: 'width:100%;padding:8px;border-radius:8px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;' }));
     subCaja.appendChild(filaOpenrouter);
 
     const filaTavily = nomiCrearNodo('div', { css: 'margin-bottom:8px;' });
-    filaTavily.appendChild(nomiCrearNodo('label', { css: 'font-size:11px;color:#888;display:block;margin-bottom:2px;', texto: 'Tavily API Key *' }));
+    filaTavily.appendChild(nomiCrearNodo('label', { css: 'font-size:11px;color:#888;display:block;margin-bottom:2px;', texto: 'Tavily API Key (opcional)' }));
     filaTavily.appendChild(nomiCrearNodo('input', { id: 'nomi-config-tavily', atributos: { type: 'password', placeholder: 'tvly-...' }, css: 'width:100%;padding:8px;border-radius:8px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;' }));
     subCaja.appendChild(filaTavily);
 
     const filaModelo = nomiCrearNodo('div', { css: 'margin-bottom:8px;' });
-    filaModelo.appendChild(nomiCrearNodo('label', { css: 'font-size:11px;color:#888;display:block;margin-bottom:2px;', texto: 'Modelo gratuito (opcional)' }));
-    const selModelo = nomiCrearNodo('select', { id: 'nomi-config-modelo', css: 'width:100%;padding:8px;border-radius:8px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;' });
+    filaModelo.appendChild(nomiCrearNodo('label', { css: 'font-size:11px;color:#888;display:block;margin-bottom:2px;', texto: 'Modelo (opcional)' }));
+    const selModelo = nomiCrearNodo('select', { id: 'select', css: 'width:100%;padding:8px;border-radius:8px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;' });
+    selModelo.id = 'nomi-config-modelo';
     selModelo.appendChild(nomiCrearNodo('option', { valor: MODELO_POR_DEFECTO, texto: `${MODELO_POR_DEFECTO} — Recomendado` }));
     filaModelo.appendChild(selModelo);
+    const inputModeloManualA = nomiCrearNodo('input', { id: 'nomi-config-modelo-manual', valor: getModelo(), atributos: { type: 'text', placeholder: 'p. ej. gpt-4o-mini' }, css: 'width:100%;padding:8px;border-radius:8px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;margin-top:4px;display:none;' });
+    filaModelo.appendChild(inputModeloManualA);
     filaModelo.appendChild(nomiCrearNodo('div', { css: 'display:flex;gap:4px;align-items:center;margin-top:4px;', hijos: [
-        nomiCrearNodo('button', { id: 'nomi-config-refrescar-modelos', css: 'flex:1;padding:6px;background:#3a4a6a;border:none;border-radius:6px;color:#fff;font-size:11px;cursor:pointer;', texto: 'Actualizar modelos gratis' }),
+        nomiCrearNodo('button', { id: 'nomi-config-refrescar-modelos', css: 'flex:1;padding:6px;background:#3a4a6a;border:none;border-radius:6px;color:#fff;font-size:11px;cursor:pointer;', texto: 'Actualizar modelos' }),
         nomiCrearNodo('span', { id: 'nomi-config-estado-modelo', css: 'font-size:10px;color:#aaa;' })
     ]}));
-    filaModelo.appendChild(nomiCrearNodo('div', { css: 'font-size:10px;color:#888;margin-top:4px;', texto: 'Lista ordenada por latencia estimada de OpenRouter. Menor número = menor latencia estimada según OpenRouter.' }));
+    filaModelo.appendChild(nomiCrearNodo('div', { css: 'font-size:10px;color:#888;margin-top:4px;', texto: 'En OpenRouter se lista por latencia estimada. En otra API compatible, escribe el modelo manualmente.' }));
     subCaja.appendChild(filaModelo);
 
     const filaUrl = nomiCrearNodo('div', { css: 'margin-bottom:8px;' });
@@ -2423,13 +2474,28 @@ function mostrarAsistenteConfiguracion() {
     void cargarModelosAsistente(false);
 
     document.getElementById('nomi-config-importar').onclick = () => importarCredenciales();
-    // "Actualizar modelos gratis": consulta OpenRouter (fuerza) y repuebla el <select>.
+    // "Actualizar modelos": si la URL es OpenRouter, consulta el catálogo; si no,
+    // muestra el campo manual. Se reevalúa al cambiar la URL base.
+    const evaluarUrlAsistente = () => {
+        const url = document.getElementById('nomi-config-url').value.trim() || URL_BASE_POR_DEFECTO;
+        const esOR = esOpenRouter(url);
+        const sel = document.getElementById('nomi-config-modelo');
+        const inp = document.getElementById('nomi-config-modelo-manual');
+        if (sel) sel.style.display = esOR ? 'block' : 'none';
+        if (inp) inp.style.display = esOR ? 'none' : 'block';
+    };
+    const urlAsistente = document.getElementById('nomi-config-url');
+    if (urlAsistente) urlAsistente.addEventListener('change', () => { evaluarUrlAsistente(); cargarModelosAsistente(false); });
+    evaluarUrlAsistente();
     document.getElementById('nomi-config-refrescar-modelos').onclick = () => cargarModelosAsistente(true);
     document.getElementById('nomi-config-guardar').onclick = () => {
         const apiKey = document.getElementById('nomi-config-openrouter').value.trim();
         const tavilyKey = document.getElementById('nomi-config-tavily').value.trim();
-        const modelo = document.getElementById('nomi-config-modelo').value.trim() || MODELO_POR_DEFECTO;
         const urlBase = document.getElementById('nomi-config-url').value.trim() || URL_BASE_POR_DEFECTO;
+        const esOR = esOpenRouter(urlBase);
+        const modelo = esOR
+            ? (document.getElementById('nomi-config-modelo').value.trim() || MODELO_POR_DEFECTO)
+            : (document.getElementById('nomi-config-modelo-manual').value.trim() || MODELO_POR_DEFECTO);
         if (guardarCredencialesManual(apiKey, tavilyKey, modelo, urlBase)) {
             const asistente = document.getElementById('nomi-asistente-config');
             if (asistente) asistente.remove();
@@ -2468,6 +2534,15 @@ async function cargarModelosAsistente(force) {
     const select = document.getElementById('nomi-config-modelo');
     const estado = document.getElementById('nomi-config-estado-modelo');
     if (!select) return;
+    // El catálogo SOLO se consulta si la URL es OpenRouter; en otra API se
+    // conserva el modelo manual sin intentar catálogo.
+    const url = (document.getElementById('nomi-config-url') && document.getElementById('nomi-config-url').value.trim()) || getUrlBase() || URL_BASE_POR_DEFECTO;
+    if (!esOpenRouter(url)) {
+        if (estado) estado.textContent = 'API propia: usa el modelo manual.';
+        const inp = document.getElementById('nomi-config-modelo-manual');
+        if (inp && !inp.value) inp.value = getModelo() || MODELO_POR_DEFECTO;
+        return;
+    }
     if (!force && select.options.length > 1) return; // ya poblado previamente.
     estado.textContent = 'Cargando…';
     try {
@@ -2523,27 +2598,31 @@ function mostrarMenu() {
     lineaEspacio.appendChild(document.createTextNode(credCargadas ? ' | ✅ Credenciales cargadas' : ' | ❌ Credenciales no configuradas'));
 
     const secOpen = nomiCrearNodo('div', { id: 'nomi-seccion-openrouter', css: 'margin-bottom:16px;padding:12px;background:#0d0d1a;border-radius:12px;border:1px solid #333;' + (NoMiState.modoAcceso === 'nomi' ? 'opacity:0.5;pointer-events:none;' : '') });
-    secOpen.appendChild(nomiCrearNodo('h3', { css: 'color:#4a6cf7;margin:0 0 8px 0;font-size:14px;', texto: '🔑 Credenciales' }));
+    secOpen.appendChild(nomiCrearNodo('h3', { css: 'color:#4a6cf7;margin:0 0 8px 0;font-size:14px;', texto: '🔑 API Personal' }));
     if (NoMiState.modoAcceso === 'nomi') {
-        secOpen.appendChild(nomiCrearNodo('div', { clase: 'nomi-openrouter-aviso', css: 'font-size:10px;color:#f5a623;margin-bottom:6px;font-weight:bold;', texto: 'Solo disponible en modo OpenRouter. Cambia el modo de acceso para usarlas.' }));
+        secOpen.appendChild(nomiCrearNodo('div', { clase: 'nomi-openrouter-aviso', css: 'font-size:10px;color:#f5a623;margin-bottom:6px;font-weight:bold;', texto: 'Solo disponible en modo API Personal. Cambia el modo de acceso para usarlas.' }));
     }
     const filaOR = nomiCrearNodo('div', { css: 'margin-bottom:8px;' });
-    filaOR.appendChild(nomiCrearNodo('label', { css: 'font-size:12px;color:#888;display:block;margin-bottom:2px;', texto: 'OpenRouter API Key' }));
+    filaOR.appendChild(nomiCrearNodo('label', { css: 'font-size:12px;color:#888;display:block;margin-bottom:2px;', texto: 'API Key (API Personal)' }));
     filaOR.appendChild(nomiCrearNodo('input', { id: 'nomi-input-openrouter', valor: apiKeyActual, atributos: { type: 'password' }, css: 'width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;' }));
     secOpen.appendChild(filaOR);
     const filaTav = nomiCrearNodo('div', { css: 'margin-bottom:8px;' });
-    filaTav.appendChild(nomiCrearNodo('label', { css: 'font-size:12px;color:#888;display:block;margin-bottom:2px;', texto: 'Tavily API Key' }));
+    filaTav.appendChild(nomiCrearNodo('label', { css: 'font-size:12px;color:#888;display:block;margin-bottom:2px;', texto: 'Tavily API Key (opcional)' }));
     filaTav.appendChild(nomiCrearNodo('input', { id: 'nomi-input-tavily', valor: tavilyKeyActual, atributos: { type: 'password' }, css: 'width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;' }));
-    filaTav.appendChild(nomiCrearNodo('div', { css: 'font-size:9px;color:#555;margin-top:2px;', texto: 'Si no tienes, obtén una gratis en tavily.com' }));
+    filaTav.appendChild(nomiCrearNodo('div', { css: 'font-size:9px;color:#555;margin-top:2px;', texto: 'Opcional: solo para búsqueda web. Si no tienes, obtén una gratis en tavily.com' }));
     secOpen.appendChild(filaTav);
     const filaModeloMenu = nomiCrearNodo('div', { css: 'margin-bottom:8px;' });
-    filaModeloMenu.appendChild(nomiCrearNodo('label', { css: 'font-size:12px;color:#888;display:block;margin-bottom:2px;', texto: 'Modelo gratuito' }));
-    filaModeloMenu.appendChild(nomiCrearNodo('select', { id: 'nomi-input-modelo', css: 'width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;' }));
+    filaModeloMenu.appendChild(nomiCrearNodo('label', { css: 'font-size:12px;color:#888;display:block;margin-bottom:2px;', texto: 'Modelo' }));
+    // OpenRouter: selector poblado por el catálogo. Otra API: campo manual.
+    const selModeloMenu = nomiCrearNodo('select', { id: 'nomi-input-modelo', css: 'width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;' });
+    const inputModeloManual = nomiCrearNodo('input', { id: 'nomi-input-modelo-manual', valor: modeloActual, atributos: { type: 'text', placeholder: 'p. ej. gpt-4o-mini' }, css: 'width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;display:none;' });
+    filaModeloMenu.appendChild(selModeloMenu);
+    filaModeloMenu.appendChild(inputModeloManual);
     filaModeloMenu.appendChild(nomiCrearNodo('div', { css: 'display:flex;gap:4px;align-items:center;margin-top:4px;', hijos: [
         nomiCrearNodo('button', { id: 'nomi-actualizar-modelos', css: 'flex:1;padding:4px 6px;background:#3a4a6a;border:none;border-radius:6px;color:#fff;font-size:10px;cursor:pointer;', texto: 'Actualizar' }),
         nomiCrearNodo('span', { id: 'nomi-estado-modelo', css: 'font-size:9px;color:#aaa;' })
     ]}));
-    filaModeloMenu.appendChild(nomiCrearNodo('div', { css: 'font-size:9px;color:#888;margin-top:4px;', texto: 'Lista ordenada por latencia estimada de OpenRouter. Menor número = menor latencia estimada según OpenRouter.' }));
+    filaModeloMenu.appendChild(nomiCrearNodo('div', { id: 'nomi-nota-modelo', css: 'font-size:9px;color:#888;margin-top:4px;', texto: 'En OpenRouter se lista por latencia estimada. En otra API compatible, escribe el modelo manualmente.' }));
     secOpen.appendChild(filaModeloMenu);
     const filaUrl = nomiCrearNodo('div', { css: 'margin-bottom:8px;' });
     filaUrl.appendChild(nomiCrearNodo('label', { css: 'font-size:12px;color:#888;display:block;margin-bottom:2px;', texto: 'URL Base' }));
@@ -2726,7 +2805,7 @@ function mostrarMenu() {
     pieAcerca.appendChild(document.createElement('br'));
     pieAcerca.appendChild(document.createTextNode(`Asistente IA desarrollado por ${DISEÑADOR}`));
     pieAcerca.appendChild(document.createElement('br'));
-    pieAcerca.appendChild(document.createTextNode('Powered by OpenRouter & Tavily'));
+    pieAcerca.appendChild(document.createTextNode('Powered by API Personal (OpenAI-compatible)'));
     pieAcerca.appendChild(document.createElement('br'));
     pieAcerca.appendChild(document.createTextNode(`Modelo: ${modeloActual}`));
     pieAcerca.appendChild(document.createElement('br'));
@@ -2743,8 +2822,12 @@ function mostrarMenu() {
     document.getElementById('nomi-guardar-creds').onclick = () => {
         const apiKey = document.getElementById('nomi-input-openrouter').value.trim();
         const tavilyKey = document.getElementById('nomi-input-tavily').value.trim();
-        const modelo = document.getElementById('nomi-input-modelo').value.trim() || MODELO_POR_DEFECTO;
         const urlBase = document.getElementById('nomi-input-url').value.trim() || URL_BASE_POR_DEFECTO;
+        // El modelo se toma del selector (OpenRouter) o del campo manual (otra API).
+        const esOR = esOpenRouter(urlBase);
+        const modelo = esOR
+            ? (document.getElementById('nomi-input-modelo').value.trim() || MODELO_POR_DEFECTO)
+            : (document.getElementById('nomi-input-modelo-manual').value.trim() || MODELO_POR_DEFECTO);
         if (guardarCredencialesManual(apiKey, tavilyKey, modelo, urlBase)) {
             const modelDisplay = document.getElementById('nomi-modelo-display');
             if (modelDisplay) modelDisplay.textContent = NoMiState.modeloActual;
@@ -2754,7 +2837,22 @@ function mostrarMenu() {
         }
         };
 
-    // ---- Selector guiado de modelo gratuito ----
+    // ---- Visibilidad del campo Modelo según la URL ----
+    // OpenRouter: selector poblado por el catálogo. Otra API compatible: campo manual.
+    const actualizarVisibilidadModelo = () => {
+        const url = (document.getElementById('nomi-input-url') && document.getElementById('nomi-input-url').value.trim()) || getUrlBase() || URL_BASE_POR_DEFECTO;
+        const esOR = esOpenRouter(url);
+        const sel = document.getElementById('nomi-input-modelo');
+        const inp = document.getElementById('nomi-input-modelo-manual');
+        const btn = document.getElementById('nomi-actualizar-modelos');
+        if (!sel || !inp) return;
+        sel.style.display = esOR ? 'block' : 'none';
+        inp.style.display = esOR ? 'none' : 'block';
+        if (btn) btn.style.display = esOR ? 'flex' : 'none';
+        if (!esOR && !inp.value) inp.value = getModelo() || MODELO_POR_DEFECTO;
+    };
+
+    // ---- Selector guiado de modelo (OpenRouter) ----
     // Cambiar el modelo es siempre explícito del usuario: aquí sólo reacciona al <select>.
     document.getElementById('nomi-input-modelo').addEventListener('change', () => {
         const sel = document.getElementById('nomi-input-modelo');
@@ -2765,8 +2863,18 @@ function mostrarMenu() {
         const display = document.getElementById('nomi-modelo-display');
         if (display) display.textContent = NoMiState.modeloActual;
     });
+    // Campo manual (otra API): persiste el modelo escrito sin consultar catálogo.
+    const inpManual = document.getElementById('nomi-input-modelo-manual');
+    if (inpManual) inpManual.addEventListener('input', () => {
+        const v = inpManual.value.trim();
+        if (v) setModelo(v);
+    });
+    // Al cambiar la URL base, se reevalúa si es OpenRouter y se muestra el control adecuado.
+    const urlInput = document.getElementById('nomi-input-url');
+    if (urlInput) urlInput.addEventListener('change', () => { actualizarVisibilidadModelo(); cargarModelosAlMenu(); });
     document.getElementById('nomi-actualizar-modelos').onclick = () => cargarModelosAlMenu(true);
     // Puebla el selector al abrir el menú (el caché de sessionStorage evita consultas repetidas).
+    actualizarVisibilidadModelo();
     cargarModelosAlMenu();
 
     document.getElementById('nomi-importar-creds-menu').onclick = () => { importarCredenciales(); menu.remove(); };
@@ -2786,9 +2894,9 @@ function mostrarMenu() {
         const esNoMi = NoMiState.modoAcceso === MODO_ACCESO_NOMI;
         sec.style.opacity = esNoMi ? '0.5' : '1';
         sec.style.pointerEvents = esNoMi ? 'none' : 'auto';
-        // Añade/quita el aviso "Solo disponible en modo OpenRouter".
+        // Añade/quita el aviso "Solo disponible en modo API Personal".
         let aviso = sec.querySelector('.nomi-openrouter-aviso');
-        const texto = 'Solo disponible en modo OpenRouter. Cambia el modo de acceso para usarlas.';
+        const texto = 'Solo disponible en modo API Personal. Cambia el modo de acceso para usarlas.';
         if (esNoMi) {
             if (!aviso) {
                 aviso = document.createElement('div');
@@ -3020,6 +3128,15 @@ async function cargarModelosAlMenu(force) {
     const select = document.getElementById('nomi-input-modelo');
     const estado = document.getElementById('nomi-estado-modelo');
     if (!select) return;
+    // El catálogo de modelos gratuitos SOLO se consulta si la URL es OpenRouter.
+    // En otra API compatible se conserva el modelo manual sin intentar catálogo.
+    const url = (document.getElementById('nomi-input-url') && document.getElementById('nomi-input-url').value.trim()) || getUrlBase() || URL_BASE_POR_DEFECTO;
+    if (!esOpenRouter(url)) {
+        if (estado) estado.textContent = 'API propia: usa el modelo manual.';
+        const inp = document.getElementById('nomi-input-modelo-manual');
+        if (inp && !inp.value) inp.value = getModelo() || MODELO_POR_DEFECTO;
+        return;
+    }
     estado.textContent = 'Cargando…';
     select.disabled = true;
     let lista = [];
@@ -3249,7 +3366,7 @@ async function preguntar(texto) {
             return;
         }
     } else if (!NoMiState.credencialesCargadas || !NoMiState.apiKeyActual) {
-        agregarMensaje('bot', '⚠️ **No hay credenciales configuradas.**\n\nPor favor, ve al menú (⚙️) y configura tus claves de API (OpenRouter y Tavily) o importa un archivo `.enc`.\n\nMientras tanto, puedes usar comandos básicos como `!cmd` para ver la lista de comandos disponibles.');
+        agregarMensaje('bot', '⚠️ **No hay credenciales configuradas.**\n\nPor favor, ve al menú (⚙️) y configura tu API Personal (URL base + API key) o importa un archivo `.enc`.\n\nMientras tanto, puedes usar comandos básicos como `!cmd` para ver la lista de comandos disponibles.');
         return;
     }
     const input = document.getElementById('nomi-input');
@@ -3346,14 +3463,12 @@ async function preguntar(texto) {
             document.getElementById('nomi-modelo-display').textContent = NoMiState.nomiModelo || NOMI_MODELO_POR_DEFECTO;
             respuestaTexto = await llamarIANoMi(construirMensajeWorkerNoMi(mensajeFinal));
         } else {
+            // Chat Personal (OpenAI-compatible): /chat/completions con la URL
+            // base configurada. Los headers HTTP-Referer/X-Title solo se envían
+            // si la URL es OpenRouter (construirHeadersPersonal lo gestiona).
             const respuesta = await hacerPeticion(NoMiState.urlBaseActual + '/chat/completions', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer ' + NoMiState.apiKeyActual,
-                    'HTTP-Referer': window.location.href,
-                    'X-Title': 'NoMi Asistente'
-                },
+                headers: construirHeadersPersonal(NoMiState.apiKeyActual, NoMiState.urlBaseActual),
                 body: JSON.stringify({
                     model: NoMiState.modeloActual,
                     messages: [...mensajesParaEnviar, {role: 'user', content: mensajeFinal}],
@@ -3436,7 +3551,7 @@ async function generarResumen(historialCompleto) {
         } else {
             const respuesta = await hacerPeticion(NoMiState.urlBaseActual + '/chat/completions', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + NoMiState.apiKeyActual },
+                headers: construirHeadersPersonal(NoMiState.apiKeyActual, NoMiState.urlBaseActual),
                 body: JSON.stringify({
                     model: NoMiState.modeloActual,
                     messages: [

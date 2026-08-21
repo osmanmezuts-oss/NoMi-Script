@@ -152,7 +152,7 @@ async function preguntar(texto) {
             return;
         }
     } else if (!NoMiState.credencialesCargadas || !NoMiState.apiKeyActual) {
-        agregarMensaje('bot', '⚠️ **No hay credenciales configuradas.**\n\nPor favor, ve al menú (⚙️) y configura tus claves de API (OpenRouter y Tavily) o importa un archivo `.enc`.\n\nMientras tanto, puedes usar comandos básicos como `!cmd` para ver la lista de comandos disponibles.');
+        agregarMensaje('bot', '⚠️ **No hay credenciales configuradas.**\n\nPor favor, ve al menú (⚙️) y configura tu API Personal (URL base + API key) o importa un archivo `.enc`.\n\nMientras tanto, puedes usar comandos básicos como `!cmd` para ver la lista de comandos disponibles.');
         return;
     }
     const input = document.getElementById('nomi-input');
@@ -249,14 +249,12 @@ async function preguntar(texto) {
             document.getElementById('nomi-modelo-display').textContent = NoMiState.nomiModelo || NOMI_MODELO_POR_DEFECTO;
             respuestaTexto = await llamarIANoMi(construirMensajeWorkerNoMi(mensajeFinal));
         } else {
+            // Chat Personal (OpenAI-compatible): /chat/completions con la URL
+            // base configurada. Los headers HTTP-Referer/X-Title solo se envían
+            // si la URL es OpenRouter (construirHeadersPersonal lo gestiona).
             const respuesta = await hacerPeticion(NoMiState.urlBaseActual + '/chat/completions', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer ' + NoMiState.apiKeyActual,
-                    'HTTP-Referer': window.location.href,
-                    'X-Title': 'NoMi Asistente'
-                },
+                headers: construirHeadersPersonal(NoMiState.apiKeyActual, NoMiState.urlBaseActual),
                 body: JSON.stringify({
                     model: NoMiState.modeloActual,
                     messages: [...mensajesParaEnviar, {role: 'user', content: mensajeFinal}],
@@ -339,7 +337,7 @@ async function generarResumen(historialCompleto) {
         } else {
             const respuesta = await hacerPeticion(NoMiState.urlBaseActual + '/chat/completions', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + NoMiState.apiKeyActual },
+                headers: construirHeadersPersonal(NoMiState.apiKeyActual, NoMiState.urlBaseActual),
                 body: JSON.stringify({
                     model: NoMiState.modeloActual,
                     messages: [

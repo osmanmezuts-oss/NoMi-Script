@@ -63,6 +63,34 @@ const NOMI_MODELO_POR_DEFECTO = 'openai/gpt-oss-20b';
 // Etiquetas legibles del proveedor activo para el indicador superior.
 const PROVEEDOR_NOMI_LABEL = 'NoMi Worker / Groq';
 const PROVEEDOR_OPENROUTER_LABEL = 'OpenRouter';
+// "API Personal" es la capa OpenAI-compatible que puede apuntar a OpenRouter
+// u otro proveedor (DeepSeek, Groq, Mistral, Together, etc.). El catálogo de
+// modelos gratuitos y los headers HTTP-Referer/X-Title solo aplican a OpenRouter.
+// Detección segura por hostname real: solo openrouter.ai y sus subdominios
+// (*.openrouter.ai). Dominios falsos (openrouter.ai.evil.com, evil.com/.../openrouter.ai)
+// o URLs inválidas devuelven false (fallback seguro vía try/catch).
+function esOpenRouter(url) {
+    if (typeof url !== 'string' || !url) return false;
+    try {
+        const host = new URL(url).hostname;
+        return host === 'openrouter.ai' || host.endsWith('.openrouter.ai');
+    } catch (e) {
+        return false;
+    }
+}
+// Construye los headers del Chat Personal (OpenAI-compatible). Los headers
+// HTTP-Referer y X-Title se envían SOLO a OpenRouter; en otra URL no se envían.
+function construirHeadersPersonal(apiKey, urlBase) {
+    const headers = {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + (apiKey || '')
+    };
+    if (esOpenRouter(urlBase)) {
+        headers['HTTP-Referer'] = (typeof window !== 'undefined' && window.location && window.location.href) || '';
+        headers['X-Title'] = 'NoMi Asistente';
+    }
+    return headers;
+}
 const NOMI_PERSONA_SISTEMA = 'Eres NoMi, un asistente profesional y formal pero cercano. Responde con claridad, respeto y precisión. Evita el tuteo excesivo y mantén un tono de colaboración entre iguales. El usuario espera respuestas útiles, concisas y bien estructuradas.';
 
 const STORAGE_MODO_ACCESO = 'nomi_modo_acceso';
