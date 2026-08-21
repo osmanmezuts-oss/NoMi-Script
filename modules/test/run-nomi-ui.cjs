@@ -56,10 +56,17 @@ function makeEl(tag) {
             if (sel) return sel.value;
             return el._value !== undefined ? el._value : '';
         },
-        set(v) { el._value = String(v); },
+        set(v) {
+            el._value = String(v);
+            // Emula el <select> real: fijar value selecciona la opción coincidente.
+            for (const c of el.children) {
+                if (c.tagName === 'OPTION') c.selected = (c.value === String(v));
+            }
+        },
     });
     el.addEventListener = (type, fn) => { (el._listeners[type] = el._listeners[type] || []).push(fn); };
     el.removeEventListener = () => {};
+    el.focus = () => {};
     el.querySelector = (sel) => buscar(el, sel, true);
     el.querySelectorAll = (sel) => buscar(el, sel, false);
     el.closest = (sel) => { let n = el; while (n) { if (matchSel(n, sel)) return n; n = n.parentNode; } return null; };
@@ -165,6 +172,17 @@ const fuentes = [
 
 const pruebas = `
 (async () => {
+    // Stub de estadoAccesoNoMi fiel al de nomi-acceso-nomi.js, para que el
+    // menú refleje correctamente el CTA Activar (visible solo sin acceso).
+    estadoAccesoNoMi = () => {
+        if (NoMiState.modoAcceso !== MODO_ACCESO_NOMI) return 'desactivado';
+        if (!NoMiState.nomiToken) return 'pendiente';
+        return NoMiState.nomiAccesoActivo ? 'activo' : 'revocado';
+    };
+    // setModoAcceso fiel: persiste en el almacenamiento simulado (GM_*),
+    // de modo que getModoAcceso() refleje el cambio tras click del CTA.
+    setModoAcceso = (m) => { NoMiState.modoAcceso = m; GM_setValue(STORAGE_MODO_ACCESO, m); };
+
     // 1) crearVentanaChat construye la ventana con todos los IDs requeridos.
     limpiarBody();
     crearVentanaChat();
@@ -387,6 +405,108 @@ const pruebas = `
     nomiVaciarNodo(vacio2);
     nomiVaciarNodo(vacio2);
     assert.strictEqual(vacio2.children.length, 0, 'nomiVaciarNodo es idempotente y seguro');
+
+    // ===== Jerarquía de acceso (NoMi primero, API Personal avanzada/colapsable) =====
+    // Recolecta los ids en orden DFS del menú para verificar el orden visual.
+    function recolectarIds(n) {
+        const out = [];
+        (function w(x) { for (const c of x.children) { if (c.nodeType === 1) { if (c.id) out.push(c.id); w(c); } } })(n);
+        return out;
+    }
+
+    // 9a) Orden: Acceso NoMi (nomi-select-modo) aparece ANTES que API Personal (nomi-personal-toggle).
+    limpiarBody();
+    mostrarMenu();
+    const menuEl = document.getElementById('nomi-menu');
+    const idsOrden = recolectarIds(menuEl);
+    const iNomi = idsOrden.indexOf('nomi-select-modo');
+    const iPers = idsOrden.indexOf('nomi-personal-toggle');
+    assert.ok(iNomi >= 0 && iPers >= 0, 'deben existir los ids de NoMi y de API Personal');
+    assert.ok(iNomi < iPers, 'Acceso NoMi debe aparecer ANTES que API Personal en el DOM');
+
+    // 9b) Selector de modo: primero "NoMi — acceso con invitación", segundo "API Personal — avanzada".
+    const selModoT = document.getElementById('nomi-select-modo');
+    assert.strictEqual(selModoT.options[0].value, 'nomi', 'selector: primer modo debe ser nomi');
+    assert.strictEqual(selModoT.options[1].value, 'openrouter', 'selector: segundo modo debe ser openrouter (API Personal)');
+    assert.ok(selModoT.options[0].textContent.includes('invitación'), 'opción NoMi menciona invitación');
+    assert.ok(selModoT.options[1].textContent.includes('avanzada'), 'opción Personal menciona avanzada');
+
+    // 9c) CTA "Activar acceso NoMi" presente y visible cuando no hay acceso.
+    const cta = document.getElementById('nomi-cta-activar');
+    assert.ok(cta, 'debe existir el CTA Activar (#nomi-cta-activar)');
+    assert.notStrictEqual(cta.style.display, 'none', 'CTA visible cuando no hay acceso NoMi');
+
+    // 9d) Colapsado: sin credenciales y modo NoMi -> API Personal cerrada (▸).
+    NoMiState.modoAcceso = MODO_ACCESO_NOMI;
+    limpiarBody();
+    mostrarMenu();
+    assert.strictEqual(document.getElementById('nomi-personal-content').style.display, 'none', 'Personal cerrada sin credenciales ni modo Personal');
+    assert.strictEqual(document.getElementById('nomi-personal-indicador').textContent, '▸', 'indicador colapsado ▸');
+
+    // 9e) Abierta automáticamente si el modo Personal (openrouter) está activo.
+    NoMiState.modoAcceso = MODO_ACCESO_OPENROUTER;
+    limpiarBody();
+    mostrarMenu();
+    assert.strictEqual(document.getElementById('nomi-personal-content').style.display, 'block', 'Personal abierta con modo Personal activo (sin credenciales)');
+    // Toggle colapsa/expande.
+    document.getElementById('nomi-personal-toggle').onclick();
+    assert.strictEqual(document.getElementById('nomi-personal-content').style.display, 'none', 'toggle colapsa Personal');
+    document.getElementById('nomi-personal-toggle').onclick();
+    assert.strictEqual(document.getElementById('nomi-personal-content').style.display, 'block', 'toggle expande Personal');
+
+    // 9f) Preservación de modo persistido: abrir el menú NO cambia el modo del usuario existente.
+    NoMiState.modoAcceso = MODO_ACCESO_OPENROUTER;
+    const modoAntes = NoMiState.modoAcceso;
+    limpiarBody();
+    mostrarMenu();
+    assert.strictEqual(NoMiState.modoAcceso, modoAntes, 'abrir menú no cambia el modo en NoMiState');
+    assert.strictEqual(getModoAcceso(), MODO_ACCESO_OPENROUTER, 'modo sigue siendo openrouter tras abrir menú');
+
+    // 9g) Regresión HUD: tras abrir/cerrar el menú el indicador sigue pintando Personal/NoMi.
+    limpiarBody();
+    crearVentanaChat();
+    NoMiState.modoAcceso = MODO_ACCESO_OPENROUTER;
+    NoMiState.credencialesCargadas = true; NoMiState.apiKeyActual = 'sk-or';
+    NoMiState.estadoHud = null; NoMiState.isWaiting = false;
+    actualizarHud();
+    assert.strictEqual(document.getElementById('nomi-hud-status').textContent, 'Personal · Activo', 'HUD Personal intacto tras la jerarquía');
+    NoMiState.modoAcceso = MODO_ACCESO_NOMI;
+    NoMiState.nomiToken = 'TOK'; NoMiState.nomiAccesoActivo = true;
+    establecerEstadoHud(null);
+    assert.strictEqual(document.getElementById('nomi-hud-status').textContent, 'NoMi · Activo', 'HUD NoMi intacto tras la jerarquía');
+    // Con acceso activo, el CTA debe ocultarse al construir el menú.
+    limpiarBody();
+    mostrarMenu();
+    assert.strictEqual(document.getElementById('nomi-cta-activar').style.display, 'none', 'CTA oculto cuando hay acceso NoMi activo');
+
+    // 9h) Sin sinks HTML: el CTA y la sección Personal usan textContent (no innerHTML).
+    assert.ok(!('innerHTML' in (document.getElementById('nomi-cta-activar'))), 'CTA no usa innerHTML');
+
+    // 9i) Click del CTA "Activar" desde modo Personal sincroniza todo a NoMi.
+    limpiarBody();
+    crearVentanaChat();
+    NoMiState.modoAcceso = MODO_ACCESO_OPENROUTER;
+    NoMiState.credencialesCargadas = false;
+    NoMiState.nomiToken = ''; NoMiState.nomiAccesoActivo = false;
+    NoMiState.estadoHud = null; NoMiState.isWaiting = false;
+    mostrarMenu();
+    const ctaClick = document.getElementById('nomi-cta-activar');
+    assert.ok(ctaClick, 'existe el CTA para simular click');
+    ctaClick.onclick();
+    // 1) Modo en NoMiState.
+    assert.strictEqual(NoMiState.modoAcceso, MODO_ACCESO_NOMI, 'click CTA: NoMiState.modoAcceso === nomi');
+    // 2) Modo persistido.
+    assert.strictEqual(getModoAcceso(), MODO_ACCESO_NOMI, 'click CTA: getModoAcceso() === nomi');
+    // 3) Selector sincronizado.
+    const selClick = document.getElementById('nomi-select-modo');
+    assert.strictEqual(selClick.value, 'nomi', 'click CTA: selector.value === nomi');
+    // 4) Sección Worker visible.
+    const workerClick = document.getElementById('nomi-seccion-worker');
+    assert.strictEqual(workerClick.style.display, 'block', 'click CTA: sección Worker visible');
+    // 5) HUD y CTA coherentes con NoMi (sin acceso aún).
+    actualizarHud();
+    assert.strictEqual(document.getElementById('nomi-hud-status').textContent, 'NoMi · Sin acceso', 'click CTA: HUD refleja NoMi (sin acceso)');
+    assert.notStrictEqual(document.getElementById('nomi-cta-activar').style.display, 'none', 'click CTA: CTA sigue visible (aún sin activar)');
 
     console.log('OK: todas las pruebas de UI (DOM simulado, sin innerHTML) pasaron');
 })().catch((e) => { console.error('FALLO:', e && e.message); throw e; });

@@ -80,19 +80,30 @@ function mostrarMenu() {
 
     const estadoAcc = estadoAccesoNoMi();
     const txtEstadoAcc = estadoAcc === 'activo' ? '✅ Activo' : estadoAcc === 'revocado' ? '⛔ Revocado/inválido' : estadoAcc === 'pendiente' ? '⏳ Pendiente de activación' : 'Desactivado';
+    const sinAccesoNoMi = estadoAcc !== 'activo';
     const secNomi = nomiCrearNodo('div', { css: 'margin-bottom:16px;padding:12px;background:#0d0d1a;border-radius:12px;border:1px solid #333;' });
-    secNomi.appendChild(nomiCrearNodo('h3', { css: 'color:#b06bff;margin:0 0 8px 0;font-size:14px;', texto: '🌐 Acceso compartido NoMi' }));
-    secNomi.appendChild(nomiCrearNodo('div', { css: 'font-size:11px;color:#888;margin-bottom:8px;', texto: 'Modo de conexión a la IA. El modo predeterminado es OpenRouter + Tavily (sin cambios).' }));
+    secNomi.appendChild(nomiCrearNodo('h3', { css: 'color:#b06bff;margin:0 0 8px 0;font-size:14px;', texto: '🌐 Acceso NoMi' }));
+    secNomi.appendChild(nomiCrearNodo('div', { css: 'font-size:11px;color:#888;margin-bottom:8px;', texto: 'Principal: usa NoMi con tu invitación, sin claves propias.' }));
     secNomi.appendChild(nomiCrearNodo('label', { css: 'font-size:12px;color:#888;display:block;margin-bottom:2px;', texto: 'Modo de acceso' }));
     secNomi.appendChild(nomiCrearNodo('select', { id: 'nomi-select-modo', css: 'width:100%;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;', hijos: [
-        nomiCrearNodo('option', { valor: 'openrouter', seleccionado: NoMiState.modoAcceso === 'openrouter', texto: 'OpenRouter + Tavily (predeterminado)' }),
-        nomiCrearNodo('option', { valor: 'nomi', seleccionado: NoMiState.modoAcceso === 'nomi', texto: 'Acceso compartido NoMi (Worker)' })
+        nomiCrearNodo('option', { valor: 'nomi', seleccionado: NoMiState.modoAcceso === 'nomi', texto: 'NoMi — acceso con invitación' }),
+        nomiCrearNodo('option', { valor: 'openrouter', seleccionado: NoMiState.modoAcceso === 'openrouter', texto: 'API Personal — avanzada' })
     ]}));
-    const secWorker = nomiCrearNodo('div', { id: 'nomi-seccion-worker', css: `display:${NoMiState.modoAcceso === 'nomi' ? 'block' : 'none'};margin-top:8px;` });
-    secWorker.appendChild(nomiCrearNodo('div', { css: 'font-size:11px;color:#aaa;margin-bottom:4px;', hijos: [
+    secNomi.appendChild(nomiCrearNodo('div', { css: 'font-size:11px;color:#aaa;margin:8px 0 4px;', hijos: [
         document.createTextNode('Estado: '),
         nomiCrearNodo('span', { id: 'nomi-estado-acceso', texto: txtEstadoAcc })
     ]}));
+    const ctaActivar = nomiCrearNodo('button', { id: 'nomi-cta-activar', css: 'width:100%;padding:8px;background:#b06bff;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;margin-bottom:8px;', texto: '🔑 Activar acceso NoMi' });
+    if (!sinAccesoNoMi) ctaActivar.style.display = 'none';
+    ctaActivar.onclick = () => {
+        const sel = document.getElementById('nomi-select-modo');
+        if (sel) sel.value = 'nomi';
+        aplicarCambioModo('nomi');
+        const codigo = document.getElementById('nomi-input-codigo');
+        if (codigo) codigo.focus();
+    };
+    secNomi.appendChild(ctaActivar);
+    const secWorker = nomiCrearNodo('div', { id: 'nomi-seccion-worker', css: `display:${NoMiState.modoAcceso === 'nomi' ? 'block' : 'none'};margin-top:8px;` });
     secWorker.appendChild(nomiCrearNodo('div', { css: 'font-size:10px;color:#666;margin-bottom:6px;', hijos: [
         document.createTextNode('Worker: '),
         nomiCrearNodo('span', { css: 'color:#888;', texto: NOMI_WORKER_URL_POR_DEFECTO }),
@@ -175,12 +186,35 @@ function mostrarMenu() {
     ]}));
     secBusq.appendChild(nomiCrearNodo('div', { css: 'font-size:11px;color:#888;', texto: credCargadas ? 'Activa la búsqueda web automática (detección de palabras clave).' : 'Primero configura tus credenciales.' }));
 
+    // ---- API Personal (avanzado): agrupa OpenRouter/Tavily ----
+    // Cerrada por defecto solo si NO hay credenciales Y el modo activo no es
+    // Personal (openrouter). Se abre sola si ya está configurada o activa.
+    const personalCerrado = !(credCargadas || NoMiState.modoAcceso === MODO_ACCESO_OPENROUTER);
+    const secPersonal = nomiCrearNodo('div', { css: 'margin-bottom:16px;' });
+    const personalHeader = nomiCrearNodo('button', { id: 'nomi-personal-toggle', css: 'width:100%;padding:10px;background:#0d0d1a;border:1px solid #333;border-radius:12px;color:#fff;font-size:14px;cursor:pointer;text-align:left;display:flex;justify-content:space-between;align-items:center;', hijos: [
+        nomiCrearNodo('span', { texto: '🔧 API Personal (avanzado)' }),
+        nomiCrearNodo('span', { id: 'nomi-personal-indicador', css: 'font-size:12px;color:#888;', texto: personalCerrado ? '▸' : '▾' })
+    ]});
+    const personalContent = nomiCrearNodo('div', { id: 'nomi-personal-content', css: 'margin-top:8px;' });
+    personalContent.style.display = personalCerrado ? 'none' : 'block';
+    personalContent.appendChild(secOpen);
+    secPersonal.appendChild(personalHeader);
+    secPersonal.appendChild(personalContent);
+    personalHeader.onclick = () => {
+        const c = document.getElementById('nomi-personal-content');
+        const ind = document.getElementById('nomi-personal-indicador');
+        if (!c) return;
+        const oculto = c.style.display === 'none';
+        c.style.display = oculto ? 'block' : 'none';
+        if (ind) ind.textContent = oculto ? '▾' : '▸';
+    };
+
     const contenedor = nomiCrearNodo('div', { css: 'margin:10px 0;' });
     contenedor.appendChild(lineaEspacio);
-    contenedor.appendChild(secOpen);
+    contenedor.appendChild(secNomi);
+    contenedor.appendChild(secPersonal);
     contenedor.appendChild(secMotor);
     contenedor.appendChild(secDiag);
-    contenedor.appendChild(secNomi);
     contenedor.appendChild(secUbi);
     contenedor.appendChild(secLig);
     contenedor.appendChild(secCtx);
@@ -274,9 +308,7 @@ function mostrarMenu() {
             aviso.remove();
         }
     };
-    const selModoNoMi = document.getElementById('nomi-select-modo');
-    if (selModoNoMi) selModoNoMi.onchange = (e) => {
-        const m = e.target.value;
+    const aplicarCambioModo = (m) => {
         setModoAcceso(m);
         const sec = document.getElementById('nomi-seccion-worker');
         if (sec) sec.style.display = m === 'nomi' ? 'block' : 'none';
@@ -287,8 +319,10 @@ function mostrarMenu() {
         NoMiState.usoNoMi = null;
         establecerEstadoHud(null);
         actualizarQuotaHud();
-        mostrarNotificacionTemporal(`🌐 Modo de acceso: ${m === 'nomi' ? 'Acceso compartido NoMi' : 'OpenRouter + Tavily'}`);
+        mostrarNotificacionTemporal(`🌐 Modo de acceso: ${m === 'nomi' ? 'Acceso NoMi' : 'API Personal'}`);
     };
+    const selModoNoMi = document.getElementById('nomi-select-modo');
+    if (selModoNoMi) selModoNoMi.onchange = (e) => aplicarCambioModo(e.target.value);
     const activarNoMiBtn = document.getElementById('nomi-activar-acceso');
     if (activarNoMiBtn) activarNoMiBtn.onclick = async () => {
         const codigo = document.getElementById('nomi-input-codigo').value.trim();
@@ -310,6 +344,8 @@ function mostrarMenu() {
             cargarModelosNoMiAlMenu();
             establecerEstadoHud(null);
             consultarUsoNoMi();
+            const ctaAct = document.getElementById('nomi-cta-activar');
+            if (ctaAct) ctaAct.style.display = 'none';
         } catch (err) {
             mostrarNotificacionTemporal('❌ ' + err.message);
         } finally {
@@ -322,6 +358,8 @@ function mostrarMenu() {
         cerrarAccesoNoMi();
         const est = document.getElementById('nomi-estado-acceso');
         if (est) est.textContent = '⏳ Pendiente de activación';
+        const ctaAct = document.getElementById('nomi-cta-activar');
+        if (ctaAct) ctaAct.style.display = 'block';
     };
     const actualizarNoMiModelos = document.getElementById('nomi-actualizar-modelos-nomi');
     if (actualizarNoMiModelos) actualizarNoMiModelos.onclick = () => cargarModelosNoMiAlMenu();
