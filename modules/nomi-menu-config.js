@@ -143,6 +143,16 @@ function mostrarMenu() {
     filaClimaAuto.appendChild(nomiCrearNodo('div', { css: 'font-size:10px;color:#888;margin-top:2px;', texto: 'Detecta consultas de clima en modo NoMi sin Tavily ni API Personal. Desactívalo para enviarlas por el chat normal.' }));
     secNomi.appendChild(filaClimaAuto);
 
+    // Preferencia independiente "Búsqueda web NoMi": Tavily SOLO en el Worker,
+    // sin clave del usuario ni API Personal. Visible siempre y activada por defecto.
+    const filaBusqNomi = nomiCrearNodo('div', { css: 'margin-top:10px;' });
+    filaBusqNomi.appendChild(nomiCrearNodo('label', { css: 'display:flex;justify-content:space-between;align-items:center;font-size:13px;', hijos: [
+        document.createTextNode('🔎 Búsqueda web NoMi'),
+        nomiCrearNodo('input', { id: 'nomi-check-busqueda-nomi', marcado: getBusquedaWebNomi(), atributos: { type: 'checkbox' } })
+    ]}));
+    filaBusqNomi.appendChild(nomiCrearNodo('div', { css: 'font-size:10px;color:#888;margin-top:2px;', texto: 'Busca en internet vía Tavily desde el servidor NoMi (sin tu clave ni API Personal). Desactívalo para enviar esas consultas por el chat normal.' }));
+    secNomi.appendChild(filaBusqNomi);
+
     const secUbi = nomiCrearNodo('div', { css: 'margin-bottom:12px;' });
     secUbi.appendChild(nomiCrearNodo('label', { css: 'display:flex;justify-content:space-between;align-items:center;font-size:14px;', hijos: [
         document.createTextNode('📍 Ubicación'),
@@ -412,6 +422,12 @@ function mostrarMenu() {
         setClimaAutomatico(NoMiState.climaAutomatico);
         menu.remove();
         mostrarNotificacionTemporal(`🌦️ Clima automático NoMi ${NoMiState.climaAutomatico ? 'activado' : 'desactivado'}.`);
+    };
+    document.getElementById('nomi-check-busqueda-nomi').onchange = (e) => {
+        NoMiState.busquedaWebNomi = e.target.checked;
+        setBusquedaWebNomi(NoMiState.busquedaWebNomi);
+        menu.remove();
+        mostrarNotificacionTemporal(`🔎 Búsqueda web NoMi ${NoMiState.busquedaWebNomi ? 'activada' : 'desactivada'}.`);
     };
     document.getElementById('nomi-select-motor').onchange = (e) => {
         NoMiState.motorBusqueda = e.target.value;

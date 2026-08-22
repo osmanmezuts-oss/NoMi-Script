@@ -18,6 +18,7 @@ import { CATALOGO, modeloPermitido, catalogoPublico } from './catalogo.js';
 import { BaseDatos } from './db.js';
 import { llamarGroq } from './groq.js';
 import { consultarClima } from './clima.js';
+import { consultarBusqueda } from './tavily.js';
 import { RateLimiterDO } from './rate-limiter-do.js';
 export { RateLimiterDO };
 import { decidirModo, CAPACIDAD } from './capacidad.js';
@@ -144,8 +145,11 @@ async function handlerChat(env, request) {
     // ciudad con Open-Meteo y consulta el forecast. NO llama a Groq ni consume
     // cuota/tokens de Groq; usa un contador diario propio (20/día UTC) aislado
     // de la cuota mensual, la bolsa global y el RateLimiterDO de Groq.
-    if (body && typeof body.herramienta === 'object' && body.herramienta !== null) {
-        if (body.herramienta.tipo !== 'clima') throw E.parametrosInvalidos('Herramienta no soportada.');
+    const herramienta = body && typeof body.herramienta === 'object' && body.herramienta !== null ? body.herramienta : null;
+    if (herramienta && herramienta.tipo !== 'clima' && herramienta.tipo !== 'busqueda') {
+        throw E.parametrosInvalidos('Herramienta no soportada.');
+    }
+    if (herramienta && herramienta.tipo === 'clima') {
         const ubicacion = typeof body.herramienta.ubicacion === 'string' ? body.herramienta.ubicacion.trim() : '';
         if (!ubicacion || ubicacion.length < 2 || ubicacion.length > 120) {
             throw E.parametrosInvalidos('Indica una ciudad válida para consultar el clima.');
@@ -174,6 +178,46 @@ async function handlerChat(env, request) {
             return json({ ok: true, respuesta: 'No se pudo consultar el clima ahora. Reintenta.', climaEstado: 'fallo_proveedor' });
         }
         return json({ ok: true, respuesta: clima.texto, climaEstado: 'ok' });
+    }
+
+    // --- Ruta de búsqueda web (herramienta, Tavily SOLO desde el Worker) ---
+    // La clave TAVILY_API_KEY vive como secreto del Worker; nunca se acepta ni se
+    // expone la clave Tavily del usuario (API Personal conserva su flujo propio).
+    // Contador diario propio en D1 (uso_busqueda_diario), atómico y aislado de
+    // cuota mensual, bolsa global y RateLimiterDO. NO guarda ni loguea la
+    // consulta, snippets ni resultados.
+    if (herramienta && herramienta.tipo === 'busqueda') {
+        const consulta = typeof herramienta.consulta === 'string' ? herramienta.consulta.trim() : '';
+        // Código específico para validación de la consulta (distinto del
+        // 'parametros-invalidos' genérico que devuelve un Worker ANTIGUO al no
+        // conocer la herramienta): el cliente distingue ambos de forma estable.
+        if (!consulta || consulta.length < 2 || consulta.length > 300) {
+            throw new ApiError('consulta-busqueda-invalida', 'Indica qué buscar (entre 2 y 300 caracteres).', 400);
+        }
+        const bytesConsulta = new TextEncoder().encode(consulta).length;
+        if (bytesConsulta > RESERVA.MAX_CONSULTA_BUSQUEDA_BYTES) {
+            throw new ApiError('consulta-busqueda-invalida', 'La búsqueda es demasiado larga.', 400);
+        }
+        const hoyBusq = diaActual();
+        const registroBusq = await db.intentarRegistrarBusqueda(usuario.id, hoyBusq);
+        // `busquedaEstado`: señal explícita y estable para el cliente (nunca se
+        // infiere del texto humano). Valores: ok | sin_resultados | limite_diario |
+        // fallo_proveedor.
+        if (!registroBusq.ok) {
+            return json({ ok: true, respuesta: 'Has superado el límite de búsquedas web por hoy (20). Inténtalo mañana.', busquedaEstado: 'limite_diario' });
+        }
+        const busqueda = await consultarBusqueda(env, consulta);
+        if (busqueda.error === 'sin_resultados') {
+            // La petición SÍ llegó a Tavily: consume cupo (evita sondear sin límite).
+            return json({ ok: true, respuesta: 'No encontré resultados útiles para esa búsqueda. Prueba con otros términos.', busquedaEstado: 'sin_resultados' });
+        }
+        if (busqueda.error === 'fallo_proveedor') {
+            // Fallo técnico de Tavily/red o rechazo del proveedor (401/403/429/5xx):
+            // culpa ajena al usuario -> revertir su cupo y permitir reintento.
+            try { await db.liberarConsultaBusqueda(usuario.id, hoyBusq); } catch { /* no bloquea la respuesta */ }
+            return json({ ok: true, respuesta: 'No se pudo realizar la búsqueda ahora. Reintenta.', busquedaEstado: 'fallo_proveedor' });
+        }
+        return json({ ok: true, busquedaEstado: 'ok', resultados: busqueda.resultados });
     }
 
     const modelo = String(body.modelo || '');

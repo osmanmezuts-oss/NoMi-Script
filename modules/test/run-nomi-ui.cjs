@@ -508,6 +508,12 @@ const pruebas = `
     assert.strictEqual(document.getElementById('nomi-hud-status').textContent, 'NoMi · Sin acceso', 'click CTA: HUD refleja NoMi (sin acceso)');
     assert.notStrictEqual(document.getElementById('nomi-cta-activar').style.display, 'none', 'click CTA: CTA sigue visible (aún sin activar)');
 
+    // 9k-a) Búsqueda web NoMi: existe en Configuración, default activado,
+    // visible/deshabilitable sin API Personal (captura antes de remover menú).
+    const chkBusqNomi = document.getElementById('nomi-check-busqueda-nomi');
+    assert.ok(chkBusqNomi, 'debe existir #nomi-check-busqueda-nomi en Configuración');
+    assert.strictEqual(chkBusqNomi.checked, true, 'búsqueda web NoMi activada por defecto');
+    assert.strictEqual(chkBusqNomi.disabled, false, 'visible y deshabilitable sin API Personal');
     // 9j) Clima automático NoMi: toggle independiente, sin credenciales, default activado.
     const chkClima = document.getElementById('nomi-check-clima-nomi');
     assert.ok(chkClima, 'debe existir #nomi-check-clima-nomi en Configuración');
@@ -521,6 +527,16 @@ const pruebas = `
     chkClima.checked = true;
     chkClima.onchange({ target: chkClima });
     assert.strictEqual(getClimaAutomatico(), true, 'reactivar persiste clima automático = true');
+
+    // 9k) Búsqueda web NoMi: toggle independiente, visible sin API Personal,
+    // activado por defecto y persistente (usa la referencia ya capturada).
+        chkBusqNomi.checked = false;
+    chkBusqNomi.onchange({ target: chkBusqNomi });
+    assert.strictEqual(getBusquedaWebNomi(), false, 'desactivar persiste búsqueda web NoMi = false');
+    assert.strictEqual(NoMiState.busquedaWebNomi, false, 'NoMiState.busquedaWebNomi = false tras toggle');
+    chkBusqNomi.checked = true;
+    chkBusqNomi.onchange({ target: chkBusqNomi });
+    assert.strictEqual(getBusquedaWebNomi(), true, 'reactivar persiste búsqueda web NoMi = true');
 
     console.log('OK: todas las pruebas de UI (DOM simulado, sin innerHTML) pasaron');
 })().catch((e) => { console.error('FALLO:', e && e.message); throw e; });

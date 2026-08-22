@@ -60,6 +60,7 @@ const SISTEMA_TOKENS = Math.ceil(new TextEncoder().encode(SISTEMA_SIN_HERRAMIENT
 // cabe bajo tokens_por_minuto del proveedor, se rechaza ANTES de llamar a Groq.
 export const RESERVA = {
     MAX_CUERPO_BYTES: 1 << 20,    // tope del cuerpo HTTP (1 MiB) antes de parsear
+    MAX_CONSULTA_BUSQUEDA_BYTES: 600, // tope bytes UTF-8 de la consulta de búsqueda NoMi
     // Tope de entrada en bytes UTF-8, DERIVADO para que (entrada + sistema + salida
     // máxima + margen) SIEMPRE quepa bajo tokens_por_minuto (8000). No es un valor a
     // mano: si cambian los límites de salida/margen/del proveedor o el mensaje de

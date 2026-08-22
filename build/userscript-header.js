@@ -33,6 +33,7 @@
 // @connect      nomi-diagnostics.osmanmezuts.workers.dev
 // @connect      nomi-api-worker.osmanmezuts.workers.dev
 // @connect      openrouter.ai
+// @connect      api.tavily.com
 // @updateURL    https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/main/NoMi%20Asistente%20V5.8.user.js
 // @downloadURL  https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/main/NoMi%20Asistente%20V5.8.user.js
 // ==/UserScript==

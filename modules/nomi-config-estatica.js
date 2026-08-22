@@ -41,6 +41,7 @@ const STORAGE_TAMANO_VENTANA = 'nomi_tamano_ventana';
 const STORAGE_UBICACION = 'nomi_ubicacion';
 const STORAGE_UBICACION_ACTIVADA = 'nomi_ubicacion_activada';
 const STORAGE_CLIMA_AUTOMATICO = 'nomi_clima_automatico';
+const STORAGE_BUSQUEDA_WEB_NOMI = 'nomi_busqueda_web_nomi';
 const STORAGE_ERROR_LOGS = 'nomi_error_logs';
 const STORAGE_CREDENCIALES_CARGADAS = 'nomi_credenciales_cargadas';
 const STORAGE_CONFIG_INICIAL = 'nomi_config_inicial';

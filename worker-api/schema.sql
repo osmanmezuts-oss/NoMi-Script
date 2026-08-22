@@ -65,3 +65,14 @@ CREATE TABLE IF NOT EXISTS uso_clima_diario (
     solicitudes INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (usuario_id, dia)
 );
+
+-- Contador diario de búsqueda web NoMi (Tavily SOLO en el Worker). Separado del
+-- clima y de la cuota mensual/bolsa global de Groq. Máximo 20 búsquedas por
+-- usuario y día UTC. NO guarda la consulta ni resultados (solo el recuento
+-- atómico por usuario+día).
+CREATE TABLE IF NOT EXISTS uso_busqueda_diario (
+    usuario_id TEXT NOT NULL,
+    dia TEXT NOT NULL,                 -- 'YYYY-MM-DD' (UTC)
+    solicitudes INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (usuario_id, dia)
+);

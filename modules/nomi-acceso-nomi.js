@@ -305,6 +305,108 @@ async function llamarClimaNoMi(texto, ubicacion) {
     }
 }
 
+// Estados explícitos que la ruta de búsqueda del Worker reporta en `busquedaEstado`.
+const ESTADOS_BUSQUEDA_NO_MI = ['ok', 'sin_resultados', 'limite_diario', 'fallo_proveedor'];
+
+// Mensaje claro cuando el Worker desplegado aún no conoce la herramienta
+// 'busqueda' (rechazo 400 parametros-invalidos) o responde sin la señal esperada.
+// SIN fallback a API Personal y SIN usar claves locales; solo informa.
+function respuestaActualizacionRequerida() {
+    return {
+        estado: 'actualizacion_requerida',
+        texto: 'Tu acceso NoMi necesita una actualización del servidor para usar la búsqueda web. Avisa al administrador para actualizar el Worker.',
+    };
+}
+
+// Validación local de la consulta, IDÉNTICA a la del Worker: si falla aquí,
+// ni siquiera se llama al Worker (y un 400 remoto jamás será por esto).
+function consultaBusquedaValidaLocal(consulta) {
+    const c = String(consulta || '').trim();
+    if (c.length < 2 || c.length > 300) return false;
+    return new TextEncoder().encode(c).length <= 600;
+}
+
+// Extrae `error` del cuerpo JSON que hacerPeticion adjunta en err.message
+// ("Error <status>: <cuerpo JSON>"). Parsing ESTRUCTURADO defensivo: si no hay
+// JSON válido devuelve null (el caller aplica su caso genérico). Nunca se
+// interpreta texto humano libre para decidir estados.
+function extraerCodigoErrorCuerpo(err) {
+    try {
+        const m = err && typeof err.message === 'string' ? err.message.match(/^\s*Error\s+\d+:\s*([\s\S]+)$/) : null;
+        if (!m) return null;
+        const datos = JSON.parse(m[1]);
+        return datos && typeof datos.error === 'string' ? datos.error : null;
+    } catch {
+        return null;
+    }
+}
+
+// Llama a la ruta de búsqueda del Worker y devuelve:
+//   { estado: 'ok', resultados: [{ titulo, url, contenido }] }  (máx. 3)
+//   { estado, texto } con estado ∈ sin_resultados | limite_diario |
+//                         fallo_proveedor | consulta_invalida |
+//                         actualizacion_requerida.
+// La señal es explícita (`busquedaEstado`): NUNCA se infiere del texto humano.
+// Un HTTP 400 se distingue por CÓDIGO estable del cuerpo JSON:
+//   - 'consulta-busqueda-invalida' -> Worker ACTUAL rechazando la consulta
+//     (defensa; la validación local ya debería evitarlo) -> mensaje humano de
+//     validación, sin reintento ni falso aviso de actualización.
+//   - cualquier otro / sin JSON    -> Worker ANTIGUO que no conoce la
+//     herramienta -> actualización requerida.
+// Errores HTTP/red idénticos a llamarIANoMi (401 → NoMiTokenInvalidoError, sin
+// fallback). NO altera llamarIANoMi ni el chat normal ni API Personal.
+async function llamarBusquedaNoMi(consulta) {
+    if (!NoMiState.nomiToken) {
+        throw new NoMiTokenInvalidoError('No hay token de acceso NoMi. Actívalo con un código de invitación en ⚙️ Configuración.');
+    }
+    // P1-2: validación local antes de red. Con la consulta ya validada, un 400
+    // remoto SOLO puede venir de un Worker que no conoce la herramienta.
+    if (!consultaBusquedaValidaLocal(consulta)) {
+        return { estado: 'consulta_invalida', texto: 'Esa búsqueda no es válida. Indica qué buscar entre 2 y 300 caracteres.' };
+    }
+    const base = nomiWorkerBase();
+    const cuerpo = {
+        modelo: NoMiState.nomiModelo || NOMI_MODELO_POR_DEFECTO,
+        mensaje: String(consulta),
+        herramienta: { tipo: 'busqueda', consulta: String(consulta) },
+    };
+    try {
+        const datos = await hacerPeticion(base + '/v1/chat', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + NoMiState.nomiToken,
+            },
+            body: JSON.stringify(cuerpo),
+        });
+        const estadoBruto = datos ? datos.busquedaEstado : undefined;
+        if (ESTADOS_BUSQUEDA_NO_MI.indexOf(estadoBruto) >= 0) {
+            if (estadoBruto === 'ok' && Array.isArray(datos.resultados)) {
+                return { estado: 'ok', resultados: datos.resultados };
+            }
+            if (estadoBruto !== 'ok' && typeof datos.respuesta === 'string') {
+                return { estado: estadoBruto, texto: datos.respuesta };
+            }
+        }
+        // 200 sin señal conocida: Worker antiguo/inesperado -> actualización requerida.
+        return respuestaActualizacionRequerida();
+    } catch (err) {
+        if (esError401NoMi(err)) {
+            setNomiAccesoActivo(false);
+            throw new NoMiTokenInvalidoError('Tu token de acceso NoMi es inválido o fue revocado. Vuelve a activarlo en ⚙️ Configuración.');
+        }
+        // P1-2: distinguir 400 por código estable del cuerpo JSON.
+        const status = err && typeof err.status === 'number' ? err.status : null;
+        if (status === 400) {
+            if (extraerCodigoErrorCuerpo(err) === 'consulta-busqueda-invalida') {
+                return { estado: 'consulta_invalida', texto: 'Esa búsqueda no es válida. Indica qué buscar entre 2 y 300 caracteres.' };
+            }
+            return respuestaActualizacionRequerida();
+        }
+        throw err;
+    }
+}
+
 // Cierra el acceso compartido NoMi en ESTE NAVEGADOR: borra el token local.
 // NO revoca el token en el servidor (eso lo hace el administrador).
 function cerrarAccesoNoMi() {

@@ -11,6 +11,7 @@ export function crearD1Stub() {
         creditos: [{ id: 1, bolsa_global: 0, reserva_propietario: 1800000, periodo: '' }],
         liberaciones: [],
         uso_clima_diario: [],
+        uso_busqueda_diario: [],
     };
 
     function runSql(sql, p) {
@@ -169,6 +170,24 @@ export function crearD1Stub() {
             if (fila && fila.solicitudes > piso) { fila.solicitudes -= 1; return { meta: { changes: 1 } }; }
             return { meta: { changes: 0 } };
         }
+        if (/^INSERT OR IGNORE INTO uso_busqueda_diario/.test(sql)) {
+            const uid = val(); const dia = val(); const sol = val();
+            const fila = tablas.uso_busqueda_diario.find(r => r.usuario_id === uid && r.dia === dia);
+            if (!fila) tablas.uso_busqueda_diario.push({ usuario_id: uid, dia, solicitudes: sol });
+            return { meta: { changes: 1 } };
+        }
+        if (/^UPDATE uso_busqueda_diario SET solicitudes = solicitudes \+ 1 WHERE usuario_id = \? AND dia = \? AND solicitudes < \?/.test(sql)) {
+            const uid = val(); const dia = val(); const tope = val();
+            const fila = tablas.uso_busqueda_diario.find(r => r.usuario_id === uid && r.dia === dia);
+            if (fila && fila.solicitudes < tope) { fila.solicitudes += 1; return { meta: { changes: 1 } }; }
+            return { meta: { changes: 0 } };
+        }
+        if (/^UPDATE uso_busqueda_diario SET solicitudes = solicitudes - 1 WHERE usuario_id = \? AND dia = \? AND solicitudes > \?/.test(sql)) {
+            const uid = val(); const dia = val(); const piso = val();
+            const fila = tablas.uso_busqueda_diario.find(r => r.usuario_id === uid && r.dia === dia);
+            if (fila && fila.solicitudes > piso) { fila.solicitudes -= 1; return { meta: { changes: 1 } }; }
+            return { meta: { changes: 0 } };
+        }
         if (/^INSERT INTO liberaciones/.test(sql)) {
             tablas.liberaciones.push({ operacion_id: val(), monto: val(), anotacion: val(), realizada_en: val() });
             return { meta: { changes: 1 } };
@@ -226,6 +245,11 @@ export function crearD1Stub() {
         if (/^SELECT solicitudes FROM uso_clima_diario/.test(sql)) {
             const usuarioId = val(); const dia = val();
             const fila = tablas.uso_clima_diario.find(r => r.usuario_id === usuarioId && r.dia === dia);
+            return fila ? { solicitudes: fila.solicitudes } : null;
+        }
+        if (/^SELECT solicitudes FROM uso_busqueda_diario/.test(sql)) {
+            const usuarioId = val(); const dia = val();
+            const fila = tablas.uso_busqueda_diario.find(r => r.usuario_id === usuarioId && r.dia === dia);
             return fila ? { solicitudes: fila.solicitudes } : null;
         }
         return null;
@@ -303,12 +327,13 @@ export function crearDoStub() {
 }
 
 // Env simulado (secretos falsos SOLO para pruebas; nunca reales).
-export function crearEnv({ db, doBinding, admin = 'admin-test', groq = 'groq-test' } = {}) {
+export function crearEnv({ db, doBinding, admin = 'admin-test', groq = 'groq-test', tavily = 'tavily-test' } = {}) {
     return {
         NOMI_DB: db || crearD1Stub(),
         ACCESS_TOKEN_SECRET: 'secret-test',
         ADMIN_SECRET: admin,
         GROQ_API_KEY: groq,
+        TAVILY_API_KEY: tavily,
         RATE_LIMITER: doBinding || crearDoStub(),
     };
 }

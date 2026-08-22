@@ -21,6 +21,93 @@ function agregarMensaje(quien, texto) {
     chatBody.scrollTop = chatBody.scrollHeight;
 }
 
+// Valida y normaliza una URL de fuente con el API URL (no solo regex): exige
+// protocolo http/https absoluto y elimina query/hash (defensa en profundidad
+// sobre la saneación del Worker). Devuelve null si no es segura.
+function nomiUrlFuenteSegura(u) {
+    if (typeof u !== 'string' || !u.trim()) return null;
+    try {
+        const parsed = new URL(u.trim());
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+        parsed.search = '';
+        parsed.hash = '';
+        return parsed.toString();
+    } catch {
+        return null;
+    }
+}
+
+// Mensaje de resultados de búsqueda web NoMi. Renderizado 100% seguro (CSP /
+// Trusted Types): solo createElement/textContent/appendChild, sin HTML crudo.
+// Máximo 3 resultados (los que llegan del Worker), cada uno con título/snippet y
+// fuente clicable SOLO si la URL pasa nomiUrlFuenteSegura (http/https, sin
+// query/hash); enlaces con target="_blank" y rel="noopener noreferrer". Sin
+// truncamientos arbitrarios adicionales a los ya aplicados por el Worker.
+function agregarMensajeConFuentes(resultados) {
+    const chatBody = document.getElementById('nomi-chat-body');
+    if (!chatBody) return null;
+    const color = '#34a853';
+    const msg = document.createElement('div');
+    msg.style.cssText = 'margin:4px 0; padding:6px 10px; border-radius:10px; background:#34a85333; border-left:3px solid #34a853; font-size:12px; word-wrap:break-word;';
+    const nombreMsg = document.createElement('b');
+    nombreMsg.style.color = color;
+    nombreMsg.textContent = NOMBRE_ASISTENTE + ':';
+    msg.appendChild(nombreMsg);
+    msg.appendChild(document.createTextNode(' Esto es lo que encontré en la web:'));
+    const lista = (Array.isArray(resultados) ? resultados : []).slice(0, 3);
+    if (lista.length === 0) {
+        const vacio = document.createElement('div');
+        vacio.textContent = '(sin resultados)';
+        msg.appendChild(vacio);
+    }
+    lista.forEach((r) => {
+        const item = document.createElement('div');
+        item.style.cssText = 'margin-top:6px;';
+        const lineaTitulo = document.createElement('div');
+        const vineta = document.createElement('b');
+        vineta.textContent = '• ';
+        lineaTitulo.appendChild(vineta);
+        const urlSegura = nomiUrlFuenteSegura(r && r.url);
+        if (urlSegura && r.titulo) {
+            const a = document.createElement('a');
+            a.href = urlSegura;
+            a.target = '_blank';
+            a.rel = 'noopener noreferrer';
+            a.style.color = '#8ab4ff';
+            a.textContent = String(r.titulo);
+            lineaTitulo.appendChild(a);
+        } else if (urlSegura) {
+            const a = document.createElement('a');
+            a.href = urlSegura;
+            a.target = '_blank';
+            a.rel = 'noopener noreferrer';
+            a.style.color = '#8ab4ff';
+            a.style.wordBreak = 'break-all';
+            a.textContent = urlSegura;
+            lineaTitulo.appendChild(a);
+        } else if (r && r.titulo) {
+            const spanTitulo = document.createElement('span');
+            spanTitulo.textContent = String(r.titulo);
+            lineaTitulo.appendChild(spanTitulo);
+        }
+        item.appendChild(lineaTitulo);
+        if (r && r.contenido) {
+            const snippet = document.createElement('div');
+            snippet.style.cssText = 'color:#ccc;';
+            snippet.textContent = String(r.contenido);
+            item.appendChild(snippet);
+        }
+        msg.appendChild(item);
+    });
+    const nota = document.createElement('div');
+    nota.style.cssText = 'color:#888;margin-top:4px;font-size:11px;';
+    nota.textContent = 'La consulta se envió a Tavily (proveedor externo) a través del servidor NoMi.';
+    msg.appendChild(nota);
+    chatBody.appendChild(msg);
+    chatBody.scrollTop = chatBody.scrollHeight;
+    return msg;
+}
+
 function cargarHistorial() {
     const chatBody = document.getElementById('nomi-chat-body');
     if (!chatBody) return;

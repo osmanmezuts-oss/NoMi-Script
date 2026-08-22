@@ -334,6 +334,44 @@ export class BaseDatos {
         return !!(res && res.meta && res.meta.changes === 1);
     }
 
+    // ---- Contador diario de búsqueda web (separado de clima/cuota/bolsa/DO) ----
+    // Máximo 20 búsquedas por usuario y día UTC. Atómico a nivel de fila. NO
+    // guarda la consulta ni resultados (solo el recuento por usuario+día).
+    async contarConsultasBusqueda(usuarioId, dia) {
+        const fila = await this.first(
+            'SELECT solicitudes FROM uso_busqueda_diario WHERE usuario_id = ? AND dia = ?',
+            usuarioId, dia
+        );
+        return fila ? Number(fila.solicitudes) : 0;
+    }
+
+    async intentarRegistrarBusqueda(usuarioId, dia) {
+        await this.run(
+            'INSERT OR IGNORE INTO uso_busqueda_diario (usuario_id, dia, solicitudes) VALUES (?, ?, ?)',
+            usuarioId, dia, 0
+        );
+        const res = await this.run(
+            'UPDATE uso_busqueda_diario SET solicitudes = solicitudes + 1 WHERE usuario_id = ? AND dia = ? AND solicitudes < ?',
+            usuarioId, dia,
+            20
+        );
+        if (res && res.meta && res.meta.changes === 1) {
+            return { ok: true, cuenta: await this.contarConsultasBusqueda(usuarioId, dia) };
+        }
+        return { ok: false };
+    }
+
+    // Rollback cuando el proveedor falló (culpa ajena al usuario). Atómico y
+    // acotado: nunca baja de 0. Devuelve true si liberó una unidad.
+    async liberarConsultaBusqueda(usuarioId, dia) {
+        const res = await this.run(
+            'UPDATE uso_busqueda_diario SET solicitudes = solicitudes - 1 WHERE usuario_id = ? AND dia = ? AND solicitudes > ?',
+            usuarioId, dia,
+            0
+        );
+        return !!(res && res.meta && res.meta.changes === 1);
+    }
+
     // Hooks para tests (inyección de generación sin dependencias reales).
     generarCodigo() { return generarCodigoInvitacion(); }
     generarToken() { return generarTokenInstalacion(); }

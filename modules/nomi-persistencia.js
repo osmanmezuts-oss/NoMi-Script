@@ -85,6 +85,10 @@ function setUbicacionActivada(v) { setValor(STORAGE_UBICACION_ACTIVADA, v); NoMi
 // Configuración aunque no haya API Personal/Tavily. Por defecto activada.
 function getClimaAutomatico() { const v = getValor(STORAGE_CLIMA_AUTOMATICO, null); return v === null ? true : !!v; }
 function setClimaAutomatico(v) { setValor(STORAGE_CLIMA_AUTOMATICO, !!v); NoMiState.climaAutomatico = !!v; }
+// Preferencia independiente "Búsqueda web NoMi": Tavily SOLO en el Worker, sin
+// clave del usuario y sin API Personal. Visible/desactivable siempre.
+function getBusquedaWebNomi() { const v = getValor(STORAGE_BUSQUEDA_WEB_NOMI, null); return v === null ? true : !!v; }
+function setBusquedaWebNomi(v) { setValor(STORAGE_BUSQUEDA_WEB_NOMI, !!v); NoMiState.busquedaWebNomi = !!v; }
 function getUbicacion() {
     const data = getValor(STORAGE_UBICACION, null);
     if (!data) return null;
