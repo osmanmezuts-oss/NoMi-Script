@@ -7,6 +7,11 @@ compatibility_date = "2025-08-01"
 #   GROQ_API_KEY        -> API key de Groq
 #   ADMIN_SECRET        -> token para endpoints administrativos privados
 #   ACCESS_TOKEN_SECRET -> pepper HMAC para hashes de códigos/tokens de acceso
+#   TAVILY_API_KEY      -> API key de Tavily; REQUERIDA solo para la herramienta
+#                          de búsqueda web NoMi (`herramienta.tipo = "busqueda"`).
+#                          Nunca se expone al cliente ni se acepta del cliente.
+#                          Sin ella, la búsqueda devuelve fallo_proveedor con
+#                          rollback de cupo; el resto (chat, clima) no la usa.
 
 # D1: base de datos de usuarios, invitaciones, cuota mensual y contadores.
 # Crear con: wrangler d1 create nomi-api-db  (anotar el database_id)
@@ -25,3 +30,6 @@ new_sqlite_classes = ["RateLimiterDO"]
 
 [vars]
 NOMI_API_VERSION = "0.1.0"
+# Opcional (P2): timeout en milisegundos de la llamada a Tavily en la búsqueda
+# web NoMi. Default 10000 (10 s); vencido -> fallo_proveedor con rollback de cupo.
+# TAVILY_TIMEOUT_MS = 10000
