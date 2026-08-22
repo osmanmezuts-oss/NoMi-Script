@@ -2,19 +2,25 @@
 // En tests se usa un stub (nunca se llama a la API real). Solo contabiliza usage real del proveedor.
 
 import { E } from './errores.js';
+// El mensaje de sistema se define en limites.js como fuente única: ahí se reserva
+// su presupuesto de tokens (SISTEMA_TOKENS) para no superar tokens_por_minuto.
+import { SISTEMA_SIN_HERRAMIENTAS } from './limites.js';
 
 export const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
 // Llama a Groq. Devuelve { texto, usage } con usage del proveedor.
 // Lanza E.proveedorNoDisponible en fallo de red o 5xx; E.parametrosInvalidos en 4xx.
 export async function llamarGroq(env, { modelo, mensajes, max_tokens }) {
+    // Mensajes completos con la instrucción de sistema al inicio (sin duplicar si
+    // ya viniera una; el handler solo envía un mensaje de usuario).
+    const mensajesCompletos = [{ role: 'system', content: SISTEMA_SIN_HERRAMIENTAS }, ...(mensajes || [])];
     const resp = await fetch(GROQ_URL, {
         method: 'POST',
         headers: {
             'content-type': 'application/json',
             authorization: 'Bearer ' + env.GROQ_API_KEY,
         },
-        body: JSON.stringify({ model: modelo, messages: mensajes, max_tokens, stream: false }),
+        body: JSON.stringify({ model: modelo, messages: mensajesCompletos, max_tokens, stream: false }),
     });
 
     if (!resp.ok) {

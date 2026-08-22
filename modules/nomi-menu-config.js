@@ -133,6 +133,16 @@ function mostrarMenu() {
     secWorker.appendChild(nomiCrearNodo('button', { id: 'nomi-cerrar-acceso-nomi', css: 'width:100%;padding:6px;background:#f55036;border:none;border-radius:8px;color:#fff;font-size:11px;cursor:pointer;margin-top:6px;', texto: '🗑️ Cerrar acceso (borra el token de este navegador)' }));
     secNomi.appendChild(secWorker);
 
+    // Preferencia independiente de clima NoMi: desactivable aunque no haya API
+    // Personal/Tavily configurada. No afecta a Tavily de Personal.
+    const filaClimaAuto = nomiCrearNodo('div', { css: 'margin-top:10px;padding-top:8px;border-top:1px solid #333;' });
+    filaClimaAuto.appendChild(nomiCrearNodo('label', { css: 'display:flex;justify-content:space-between;align-items:center;font-size:13px;', hijos: [
+        document.createTextNode('🌦️ Clima automático NoMi'),
+        nomiCrearNodo('input', { id: 'nomi-check-clima-nomi', marcado: getClimaAutomatico(), atributos: { type: 'checkbox' } })
+    ]}));
+    filaClimaAuto.appendChild(nomiCrearNodo('div', { css: 'font-size:10px;color:#888;margin-top:2px;', texto: 'Detecta consultas de clima en modo NoMi sin Tavily ni API Personal. Desactívalo para enviarlas por el chat normal.' }));
+    secNomi.appendChild(filaClimaAuto);
+
     const secUbi = nomiCrearNodo('div', { css: 'margin-bottom:12px;' });
     secUbi.appendChild(nomiCrearNodo('label', { css: 'display:flex;justify-content:space-between;align-items:center;font-size:14px;', hijos: [
         document.createTextNode('📍 Ubicación'),
@@ -397,6 +407,12 @@ function mostrarMenu() {
     const actualizarNoMiModelos = document.getElementById('nomi-actualizar-modelos-nomi');
     if (actualizarNoMiModelos) actualizarNoMiModelos.onclick = () => cargarModelosNoMiAlMenu();
     if (getNomiToken()) cargarModelosNoMiAlMenu();
+    document.getElementById('nomi-check-clima-nomi').onchange = (e) => {
+        NoMiState.climaAutomatico = e.target.checked;
+        setClimaAutomatico(NoMiState.climaAutomatico);
+        menu.remove();
+        mostrarNotificacionTemporal(`🌦️ Clima automático NoMi ${NoMiState.climaAutomatico ? 'activado' : 'desactivado'}.`);
+    };
     document.getElementById('nomi-select-motor').onchange = (e) => {
         NoMiState.motorBusqueda = e.target.value;
         setMotorBusqueda(NoMiState.motorBusqueda);

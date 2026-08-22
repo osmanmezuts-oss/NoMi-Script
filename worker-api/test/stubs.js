@@ -10,6 +10,7 @@ export function crearD1Stub() {
         uso_mensual: [],
         creditos: [{ id: 1, bolsa_global: 0, reserva_propietario: 1800000, periodo: '' }],
         liberaciones: [],
+        uso_clima_diario: [],
     };
 
     function runSql(sql, p) {
@@ -150,6 +151,24 @@ export function crearD1Stub() {
             }
             return { meta: { changes: 0 } };
         }
+        if (/^INSERT OR IGNORE INTO uso_clima_diario/.test(sql)) {
+            const uid = val(); const dia = val(); const sol = val();
+            const fila = tablas.uso_clima_diario.find(r => r.usuario_id === uid && r.dia === dia);
+            if (!fila) tablas.uso_clima_diario.push({ usuario_id: uid, dia, solicitudes: sol });
+            return { meta: { changes: 1 } };
+        }
+        if (/^UPDATE uso_clima_diario SET solicitudes = solicitudes \+ 1 WHERE usuario_id = \? AND dia = \? AND solicitudes < \?/.test(sql)) {
+            const uid = val(); const dia = val(); const tope = val();
+            const fila = tablas.uso_clima_diario.find(r => r.usuario_id === uid && r.dia === dia);
+            if (fila && fila.solicitudes < tope) { fila.solicitudes += 1; return { meta: { changes: 1 } }; }
+            return { meta: { changes: 0 } };
+        }
+        if (/^UPDATE uso_clima_diario SET solicitudes = solicitudes - 1 WHERE usuario_id = \? AND dia = \? AND solicitudes > \?/.test(sql)) {
+            const uid = val(); const dia = val(); const piso = val();
+            const fila = tablas.uso_clima_diario.find(r => r.usuario_id === uid && r.dia === dia);
+            if (fila && fila.solicitudes > piso) { fila.solicitudes -= 1; return { meta: { changes: 1 } }; }
+            return { meta: { changes: 0 } };
+        }
         if (/^INSERT INTO liberaciones/.test(sql)) {
             tablas.liberaciones.push({ operacion_id: val(), monto: val(), anotacion: val(), realizada_en: val() });
             return { meta: { changes: 1 } };
@@ -203,6 +222,11 @@ export function crearD1Stub() {
             const operacionId = val();
             const fila = tablas.liberaciones.find(r => r.operacion_id === operacionId);
             return fila ? { operacion_id: fila.operacion_id } : null;
+        }
+        if (/^SELECT solicitudes FROM uso_clima_diario/.test(sql)) {
+            const usuarioId = val(); const dia = val();
+            const fila = tablas.uso_clima_diario.find(r => r.usuario_id === usuarioId && r.dia === dia);
+            return fila ? { solicitudes: fila.solicitudes } : null;
         }
         return null;
     }

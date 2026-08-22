@@ -508,6 +508,20 @@ const pruebas = `
     assert.strictEqual(document.getElementById('nomi-hud-status').textContent, 'NoMi · Sin acceso', 'click CTA: HUD refleja NoMi (sin acceso)');
     assert.notStrictEqual(document.getElementById('nomi-cta-activar').style.display, 'none', 'click CTA: CTA sigue visible (aún sin activar)');
 
+    // 9j) Clima automático NoMi: toggle independiente, sin credenciales, default activado.
+    const chkClima = document.getElementById('nomi-check-clima-nomi');
+    assert.ok(chkClima, 'debe existir #nomi-check-clima-nomi en Configuración');
+    assert.strictEqual(chkClima.checked, true, 'clima automático NoMi activado por defecto');
+    assert.strictEqual(chkClima.disabled, false, 'no se deshabilita por falta de API Personal/Tavily');
+    // Desactivar persiste la preferencia (getClimaAutomatico refleja el cambio).
+        chkClima.checked = false;
+    chkClima.onchange({ target: chkClima });
+    assert.strictEqual(getClimaAutomatico(), false, 'desactivar persiste clima automático = false');
+    assert.strictEqual(NoMiState.climaAutomatico, false, 'NoMiState.climaAutomatico = false tras toggle');
+    chkClima.checked = true;
+    chkClima.onchange({ target: chkClima });
+    assert.strictEqual(getClimaAutomatico(), true, 'reactivar persiste clima automático = true');
+
     console.log('OK: todas las pruebas de UI (DOM simulado, sin innerHTML) pasaron');
 })().catch((e) => { console.error('FALLO:', e && e.message); throw e; });
 `;

@@ -8,6 +8,7 @@ window.NoMiState = {
     busquedaWebActiva: false,
     busquedaWebTemporal: false,
     ubicacionActivada: false,
+    climaAutomatico: true,
     contextoSeleccionado: 10,
     resumenPersistente: '',
     modeloActual: MODELO_POR_DEFECTO,

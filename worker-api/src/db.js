@@ -291,7 +291,50 @@ export class BaseDatos {
         return { repetida: false };
     }
 
-                // Hooks para tests (inyección de generación sin dependencias reales).
+                // ---- Contador diario de clima (separado de cuota mensual/bolsa de Groq) ----
+    // Máximo 20 consultas por usuario y día UTC. Atómico a nivel de fila: el
+    // incremento solo se aplica si la cuenta actual es < 20. No reutiliza los
+    // contadores/tokens de Groq. No guarda la ciudad ni la respuesta.
+    async contarConsultasClima(usuarioId, dia) {
+        const fila = await this.first(
+            'SELECT solicitudes FROM uso_clima_diario WHERE usuario_id = ? AND dia = ?',
+            usuarioId, dia
+        );
+        return fila ? Number(fila.solicitudes) : 0;
+    }
+
+    // Intenta registrar una consulta de clima. Devuelve { ok:true, cuenta } si
+    // cupo, o { ok:false } si ya se alcanzó el tope diario (20).
+    async intentarRegistrarClima(usuarioId, dia) {
+        await this.run(
+            'INSERT OR IGNORE INTO uso_clima_diario (usuario_id, dia, solicitudes) VALUES (?, ?, ?)',
+            usuarioId, dia, 0
+        );
+        const res = await this.run(
+            'UPDATE uso_clima_diario SET solicitudes = solicitudes + 1 WHERE usuario_id = ? AND dia = ? AND solicitudes < ?',
+            usuarioId, dia,
+            20
+        );
+        if (res && res.meta && res.meta.changes === 1) {
+            return { ok: true, cuenta: await this.contarConsultasClima(usuarioId, dia) };
+        }
+        return { ok: false };
+    }
+
+    // Rollback de una consulta de clima registrada cuyo proveedor falló (fallo
+    // técnico de Open-Meteo/red: culpa ajena al usuario). Atómico y acotado:
+    // el decremento solo aplica si solicitudes > 0, nunca baja de 0 ni afecta
+    // a otros días/usuarios. Devuelve true si liberó una unidad.
+    async liberarConsultaClima(usuarioId, dia) {
+        const res = await this.run(
+            'UPDATE uso_clima_diario SET solicitudes = solicitudes - 1 WHERE usuario_id = ? AND dia = ? AND solicitudes > ?',
+            usuarioId, dia,
+            0
+        );
+        return !!(res && res.meta && res.meta.changes === 1);
+    }
+
+    // Hooks para tests (inyección de generación sin dependencias reales).
     generarCodigo() { return generarCodigoInvitacion(); }
     generarToken() { return generarTokenInstalacion(); }
 

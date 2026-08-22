@@ -17,6 +17,7 @@ import { ApiError, E } from './errores.js';
 import { CATALOGO, modeloPermitido, catalogoPublico } from './catalogo.js';
 import { BaseDatos } from './db.js';
 import { llamarGroq } from './groq.js';
+import { consultarClima } from './clima.js';
 import { RateLimiterDO } from './rate-limiter-do.js';
 export { RateLimiterDO };
 import { decidirModo, CAPACIDAD } from './capacidad.js';
@@ -137,6 +138,44 @@ async function handlerChat(env, request) {
     // Límite del cuerpo HTTP con límite real de bytes (confía en Content-Length y,
     // si falta, lee el stream hasta un tope). Evita cuerpos abusivos antes de Groq.
     const body = await leerJsonLimitado(request, RESERVA.MAX_CUERPO_BYTES);
+
+    // --- Ruta de clima (herramienta) ---
+    // El Worker es el único intermediario: autentica al invitado, resuelve la
+    // ciudad con Open-Meteo y consulta el forecast. NO llama a Groq ni consume
+    // cuota/tokens de Groq; usa un contador diario propio (20/día UTC) aislado
+    // de la cuota mensual, la bolsa global y el RateLimiterDO de Groq.
+    if (body && typeof body.herramienta === 'object' && body.herramienta !== null) {
+        if (body.herramienta.tipo !== 'clima') throw E.parametrosInvalidos('Herramienta no soportada.');
+        const ubicacion = typeof body.herramienta.ubicacion === 'string' ? body.herramienta.ubicacion.trim() : '';
+        if (!ubicacion || ubicacion.length < 2 || ubicacion.length > 120) {
+            throw E.parametrosInvalidos('Indica una ciudad válida para consultar el clima.');
+        }
+        const hoy = diaActual();
+        const registro = await db.intentarRegistrarClima(usuario.id, hoy);
+        // `climaEstado`: señal explícita y estable para el cliente (nunca debe
+        // inferirse del texto humano). Valores: ok | ciudad_no_encontrada |
+        // limite_diario | fallo_proveedor.
+        if (!registro.ok) {
+            // Límite diario alcanzado: mensaje humano, sin fuga técnica ni 429 de Groq.
+            return json({ ok: true, respuesta: 'Has superado el límite de consultas de clima por hoy (20). Inténtalo mañana.', climaEstado: 'limite_diario' });
+        }
+        const clima = await consultarClima(env, ubicacion);
+        if (clima.error === 'ciudad_no_encontrada') {
+            // La petición SÍ fue procesada por el proveedor (geocoding): consume
+            // cupo. Así se evita sondear el endpoint externo sin límite.
+            return json({ ok: true, respuesta: 'No encontré la ciudad. Indica la ciudad y el país (por ejemplo, Santa Cruz de la Sierra, Bolivia).', climaEstado: 'ciudad_no_encontrada' });
+        }
+        if (clima.error === 'fallo_proveedor') {
+            // Fallo técnico de Open-Meteo/red: culpa ajena al usuario, NO debe
+            // castigar su cupo diario. Rollback best-effort del registro atómico
+            // (nunca baja de 0); si falla el rollback, la respuesta humana es
+            // igualmente válida y el usuario reintenta.
+            try { await db.liberarConsultaClima(usuario.id, hoy); } catch { /* no bloquea la respuesta */ }
+            return json({ ok: true, respuesta: 'No se pudo consultar el clima ahora. Reintenta.', climaEstado: 'fallo_proveedor' });
+        }
+        return json({ ok: true, respuesta: clima.texto, climaEstado: 'ok' });
+    }
+
     const modelo = String(body.modelo || '');
     const mensaje = typeof body.mensaje === 'string' ? body.mensaje : '';
 
@@ -170,10 +209,11 @@ async function handlerChat(env, request) {
     const maxSalida = Math.min(cap.max_tokens, RESERVA.MAX_SALIDA_TOKENS);
 
     // Límite conservador y verificable: peor caso 1 token por byte de entrada.
-    // máximo posible = entrada (peor caso) + salida + margen. Si NO cabe bajo
-    // tokens_por_minuto del proveedor, se rechaza ANTES de llamar a Groq (sin Math.min).
+    // máximo posible = entrada (peor caso) + mensaje de sistema (añadido por
+    // llamarGroq) + salida + margen. Si NO cabe bajo tokens_por_minuto del
+    // proveedor, se rechaza ANTES de llamar a Groq (sin Math.min).
     const tokensEntrada = bytesEntrada * RESERVA.TOKENS_POR_BYTE_ENTRADA;
-    const tokensNecesarios = tokensEntrada + maxSalida + RESERVA.MARGEN_TOKEN;
+    const tokensNecesarios = tokensEntrada + RESERVA.SISTEMA_TOKENS + maxSalida + RESERVA.MARGEN_TOKEN;
     if (tokensNecesarios > LIMITES_GROQ.tokens_por_minuto) {
         throw E.parametrosInvalidos('La petición excede el límite de tokens por minuto.');
     }

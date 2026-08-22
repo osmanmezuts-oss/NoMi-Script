@@ -41,27 +41,34 @@ export const CAPACIDAD_DIARIA = {
     MAX_INVITADOS: 10,
 };
 
-// Salida máxima por llamada y margen de seguridad (tokens de sistema, etc.).
+// Salida máxima por llamada y margen de seguridad.
 const MAX_SALIDA_TOKENS = 1024;
 const MARGEN_TOKEN = 256;
 const TOKENS_POR_BYTE_ENTRADA = 1; // peor caso verificable: 1 token por byte de entrada
 
+// Mensaje de sistema que llamarGroq antepone a CADA petición (anti-!search).
+// Fuente única aquí para que el presupuesto de tokens lo reserve de forma explícita
+// (auditoría): el presupuesto conservador debe cubrir el sistema añadido por llamarGroq.
+export const SISTEMA_SIN_HERRAMIENTAS = 'Eres NoMi, un asistente útil y conversacional. Reglas estrictas: NUNCA emitas comandos internos, "!search", ni ninguna instrucción de herramienta o llamada a funciones. NUNCA afirmes haber realizado búsquedas en la web ni consultado servicios externos si no es así. Responde de forma natural y útil.';
+// Tokens (peor caso) del mensaje de sistema = bytes * 1 token/byte.
+const SISTEMA_TOKENS = Math.ceil(new TextEncoder().encode(SISTEMA_SIN_HERRAMIENTAS).length * TOKENS_POR_BYTE_ENTRADA);
+
 // Reserva de tokens antes de llamar a Groq. El cuerpo HTTP se limita antes de parsear
 // y el mensaje se limita por BYTES UTF-8. La reserva usa un peor caso VERIFICABLE:
-// 1 token por byte de entrada (un token ocupa al menos 1 byte), de modo que el
+// 1 token por byte (entrada del usuario + mensaje de sistema añadido), de modo que el
 // "máximo posible" es comprobable y jamás se oculta un exceso con Math.min; si no
 // cabe bajo tokens_por_minuto del proveedor, se rechaza ANTES de llamar a Groq.
 export const RESERVA = {
     MAX_CUERPO_BYTES: 1 << 20,    // tope del cuerpo HTTP (1 MiB) antes de parsear
-    // Tope de entrada en bytes UTF-8, DERIVADO para que (entrada + salida máxima +
-    // margen) SIEMPRE quepa bajo tokens_por_minuto (8000). Verificación con valores
-    // actuales: 6720*1 + 1024 + 256 = 8000 <= 8000. No es un valor a mano: si cambian
-    // los límites de salida/margen o del proveedor, se recalcula solo y nunca permite
-    // exceder tokens/minuto.
-    MAX_ENTRADA_BYTES: Math.max(0, LIMITES_GROQ.tokens_por_minuto - MAX_SALIDA_TOKENS - MARGEN_TOKEN),
+    // Tope de entrada en bytes UTF-8, DERIVADO para que (entrada + sistema + salida
+    // máxima + margen) SIEMPRE quepa bajo tokens_por_minuto (8000). No es un valor a
+    // mano: si cambian los límites de salida/margen/del proveedor o el mensaje de
+    // sistema, se recalcula solo y nunca permite exceder tokens/minuto.
+    MAX_ENTRADA_BYTES: Math.max(0, LIMITES_GROQ.tokens_por_minuto - MAX_SALIDA_TOKENS - MARGEN_TOKEN - SISTEMA_TOKENS),
     TOKENS_POR_BYTE_ENTRADA,
     MARGEN_TOKEN,
     MAX_SALIDA_TOKENS,
+    SISTEMA_TOKENS, // tokens (peor caso) del mensaje de sistema añadido en llamarGroq
 };
 
 // Renovación mensual: se define como configuración explícita (no se asume reset de Groq).

@@ -68,6 +68,7 @@ function iniciarAsistente() {
     NoMiState.busquedaWebActiva = getBusquedaWeb();
     NoMiState.tamanoVentana = getTamanoVentana();
     NoMiState.ubicacionActivada = getUbicacionActivada();
+    NoMiState.climaAutomatico = getClimaAutomatico();
     NoMiState.ubicacionActual = getUbicacion();
     NoMiState.credencialesCargadas = getCredencialesCargadas();
     NoMiState.apiKeyActual = getApiKey();
@@ -139,6 +140,131 @@ function iniciarAsistente() {
     void verificarModeloAlIniciar();
 }
 
+// ---- Clima vía Worker NoMi (sin Tavily, sin Groq) ----
+// Sufijos temporales que pueden seguir a la ciudad ("en La Paz mañana") y que NO
+// deben enviarse a Open-Meteo como parte de la ubicación (auditoría hallazgo 1).
+const SUFIJOS_TEMPORALES_CLIMA = [
+    'hoy', 'mañana', 'manana', 'madrugada', 'ayer', 'pasado', 'ahora', 'luego', 'después', 'despues',
+    'lunes', 'martes', 'miércoles', 'miercoles', 'jueves', 'viernes', 'sábado', 'sabado', 'domingo',
+    'próxima', 'proxima', 'próximo', 'proximo', 'semana', 'mismo', 'durante', 'noche', 'tarde',
+    'mediodía', 'mediodia',
+];
+const CONJUNTO_SUFIJOS = new Set(SUFIJOS_TEMPORALES_CLIMA);
+
+function limpiarSufijosTemporalesCiudad(ciudad) {
+    const partes = String(ciudad || '').trim().split(/\s+/);
+    while (partes.length > 1 && CONJUNTO_SUFIJOS.has(partes[partes.length - 1].toLowerCase())) {
+        partes.pop();
+    }
+    return partes.join(' ').trim();
+}
+
+// Detección conservadora de consultas meteorológicas en modo NoMi. Devuelve la
+// ubicación a consultar o null (entonces el chat sigue normal).
+// - Palabras fuertes: clima, pronóstico/pronostico, temperatura, lluvia, viento.
+// - "tiempo" SOLO en expresiones meteorológicas claras ("qué tiempo hace/hará",
+//   "tiempo hoy/mañana"); nunca como palabra aislada ("¿cuánto tiempo tardas?",
+//   "tiempo de ejecución") para evitar falsos positivos.
+// - Se activa solo con ciudad tras "en …" (recortando sufijos temporales) O
+//   ubicación local previamente habilitada.
+function detectarClimaNoMi(texto) {
+    if (typeof texto !== 'string' || !texto.trim()) return null;
+    const t = texto.trim();
+        const climaFuerte = /\b(clima|pronóstico|pronostico|temperatura|lluvia|viento)\b/i.test(t);
+    // Límite compatible con tildes: `\b` en JS no contempla á/é/ó/ñ como `\w`, por
+    // lo que `hará\b`/`está\b`/`será\b` fallan cuando van seguidos de espacio o
+    // puntuación (p. ej. "qué tiempo hará mañana"). Tras hace/hará/hara/está/
+    // esta/este/será/sera usamos el look-ahead positivo `(?=$|[\s?.,!¿¡])`,
+    // compatible con espacio, puntuación o fin de texto sin romper acentos. Los
+    // falsos positivos ("cuánto tiempo tardas…", "tiempo de ejecución…") se
+    // siguen bloqueando por la estructura de la frase, no por el límite.
+    const climaPorTiempo = /\btiempo\b/i.test(t) && (
+        /\b(qué|que|cómo|como)\s+tiempo\s+(hace|hará|hara|está|esta|este|será|sera)(?=$|[\s?.,!¿¡])/i.test(t) ||
+        /\btiempo\s+(hoy|mañana|manana|ahora)\b/i.test(t)
+    );
+    if (!climaFuerte && !climaPorTiempo) return null;
+    // a) Ciudad identificable tras "en …" (eliminando sufijos temporales).
+    const m = t.match(/\ben\s+([^?.,!¿¡]+)/i);
+    if (m && m[1].trim().length >= 3) {
+        const ciudad = limpiarSufijosTemporalesCiudad(m[1].trim());
+        if (ciudad.length >= 3) return ciudad;
+    }
+    // b) Ubicación local explícitamente habilitada.
+    if (NoMiState.ubicacionActivada && NoMiState.ubicacionActual && NoMiState.ubicacionActual.ciudad) {
+        const u = NoMiState.ubicacionActual;
+        return (u.ciudad + (u.pais ? ', ' + u.pais : '')).trim();
+    }
+    return null;
+}
+
+// Maneja una consulta de clima en modo NoMi: llama al Worker con `herramienta`
+// y pinta la respuesta breve. El Worker nunca pasa por Groq ni usa Tavily.
+async function manejarClimaNoMi(texto, ubicacion) {
+    NoMiState.isWaiting = true;
+    deshabilitarControlesEnvio();
+    actualizarHud();
+    NoMiState.historial.push({ role: 'user', content: texto });
+    guardarHistorial(NoMiState.historial);
+    agregarMensaje('yo', texto);
+    mostrarCargando();
+    try {
+        // Señal explícita del Worker (`climaEstado`, vía llamarClimaNoMi):
+        // distingue éxito real de ciudad inexistente, límite diario y fallo
+        // temporal del proveedor SIN inspeccionar el texto humano.
+        const resultado = await llamarClimaNoMi(texto, ubicacion);
+        const respuestaTexto = resultado.texto;
+        ocultarCargando();
+        if (resultado.estado === 'fallo_proveedor') {
+            // Fallo temporal de Open-Meteo (el Worker ya revirtió la cuota):
+            // mismo tratamiento blando y reintentable que una caída de red,
+            // conservando el mensaje humano recibido.
+            NoMiState.historial.pop();
+            guardarHistorial(NoMiState.historial);
+            const dispFallo = document.getElementById('nomi-modelo-display');
+            if (dispFallo) dispFallo.textContent = '⚠️ error';
+            agregarMensaje('bot', respuestaTexto);
+            NoMiState.reintentarPregunta = texto;
+            mapearErrorHudNoMi({}); // estado HUD 'sin_conexion' -> botón "Reintentar"
+            registrarError('network', 'Clima: fallo temporal del proveedor (Open-Meteo).', `Modo: NoMi (clima), URL: ${NoMiState.nomiWorkerUrl}`);
+        } else {
+            // ok / ciudad_no_encontrada / limite_diario: consulta atendida y no
+            // reintentable tal cual; el mensaje humano ya explica cada caso.
+            NoMiState.contadorPreguntas++;
+            setContador(NoMiState.contadorPreguntas);
+            NoMiState.historial.push({ role: 'assistant', content: respuestaTexto });
+            guardarHistorial(NoMiState.historial);
+            agregarMensaje('bot', respuestaTexto);
+            NoMiState.reintentarPregunta = '';
+            actualizarStats();
+        }
+    } catch (error) {
+        ocultarCargando();
+        NoMiState.historial.pop();
+        guardarHistorial(NoMiState.historial);
+        const disp = document.getElementById('nomi-modelo-display');
+        if (disp) disp.textContent = '⚠️ error';
+        // Igual que el chat NoMi normal: la pregunta queda guardada para el
+        // reintento explícito del HUD ("Reintentar"). mapearErrorHudNoMi la
+        // limpia en 401 (acceso inválido no es reintentable).
+        NoMiState.reintentarPregunta = texto;
+        // Error humano breve sin fuga técnica.
+        agregarMensaje('bot', mensajeHumanoErrorNoMi(error));
+        mapearErrorHudNoMi(error);
+        registrarError('network', error.message, `Modo: NoMi (clima), URL: ${NoMiState.nomiWorkerUrl}`);
+    }
+    restaurarControlesEnvio();
+    NoMiState.isWaiting = false;
+    actualizarHud();
+}
+
+// Defensa en profundidad (respaldo, no el mecanismo principal): si un modelo
+// normal responde con una línea aislada `!search`, NO se muestra como respuesta
+// útil ni se ejecuta. Se registra diagnóstico SIN contenido y se muestra un error
+// humano breve.
+function esRespuestaComandoInseguro(texto) {
+    return typeof texto === 'string' && /^\s*!search(\s|$)/i.test(texto);
+}
+
 async function preguntar(texto) {
     if (NoMiState.modoAcceso === MODO_ACCESO_NOMI) {
         // Modo explícito NoMi: exige token Y acceso activo. Sin eso, informa y
@@ -149,6 +275,18 @@ async function preguntar(texto) {
         }
         if (!NoMiState.nomiAccesoActivo) {
             agregarMensaje('bot', '⛔ **Tu acceso NoMi no está activo o fue revocado.**\n\nVuelve a activar un código de invitación en ⚙️ Configuración > Acceso compartido NoMi.\nNo se usa OpenRouter en este modo.');
+            return;
+        }
+        // Clima vía Worker (solo NoMi): detección conservadora, sin Tavily ni Groq.
+        // Si el usuario desactivó "clima automático NoMi", la consulta sigue el chat
+        // normal sin herramienta (sin pasar por Open-Meteo).
+        const ubicacionClima = NoMiState.climaAutomatico ? detectarClimaNoMi(texto) : null;
+        if (ubicacionClima) {
+            // Igual que el chat normal: el texto enviado sale del input (el mensaje
+            // ya queda pintado en el chat e historial por manejarClimaNoMi).
+            const inputClima = document.getElementById('nomi-input');
+            if (inputClima) inputClima.value = '';
+            await manejarClimaNoMi(texto, ubicacionClima);
             return;
         }
     } else if (!NoMiState.credencialesCargadas || !NoMiState.apiKeyActual) {
@@ -291,6 +429,23 @@ async function preguntar(texto) {
                 actualizarHud();
                 return;
             }
+        }
+        // Defensa en profundidad SOLO en modo NoMi: una respuesta que empieza por una
+        // línea aislada `!search` NO se muestra como resultado útil ni se ejecuta
+        // (respaldo; el mecanismo principal es el Worker). Se registra diagnóstico
+        // SIN contenido. En API Personal no se aplica (auditoría hallazgo 4).
+        if (NoMiState.modoAcceso === MODO_ACCESO_NOMI && esRespuestaComandoInseguro(respuestaTexto)) {
+            ocultarCargando();
+                        const disp = document.getElementById('nomi-modelo-display');
+            // La defensa conserva el modelo de NoMi (no el de Personal/OpenRouter):
+            // en modo NoMi el indicador de modelo debe seguir mostrando nomiModelo.
+            if (disp) disp.textContent = NoMiState.nomiModelo || NOMI_MODELO_POR_DEFECTO;
+            registrarError('script', 'Respuesta del modelo con comando interno !search no ejecutada (sin contenido de usuario).', 'Seguridad');
+            agregarMensaje('bot', '❌ No pude completar esa respuesta de forma segura. Reformula tu pregunta.');
+            restaurarControlesEnvio();
+            NoMiState.isWaiting = false;
+            actualizarHud();
+            return;
         }
         // Ruta de éxito común a ambos modos.
         ocultarCargando();

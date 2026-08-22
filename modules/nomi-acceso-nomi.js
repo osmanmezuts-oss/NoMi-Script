@@ -221,13 +221,28 @@ async function obtenerCatalogoNoMi() {
     });
 }
 
+// Detecta de forma robusta un 401 del Worker (status, mensaje o error tipado).
+function esError401NoMi(err) {
+    const status = err && typeof err.status === 'number' ? err.status : null;
+    return status === 401
+        || (err instanceof NoMiTokenInvalidoError)
+        || !!(err && err.message && /401/.test(err.message));
+}
+
 // Llama al chat del Worker. Devuelve el texto de la respuesta.
-// Ante 401 marca el acceso como revocado y lanza NoMiTokenInvalidoError (sin fallback).
-async function llamarIANoMi(mensaje, maxTokens) {
+// `herramienta` (opcional) permite rutas especiales del Worker (p. ej. clima) sin
+// pasar por Groq. Ante 401 marca el acceso como revocado y lanza
+// NoMiTokenInvalidoError (sin fallback).
+async function llamarIANoMi(mensaje, maxTokens, herramienta) {
     if (!NoMiState.nomiToken) {
         throw new NoMiTokenInvalidoError('No hay token de acceso NoMi. Actívalo con un código de invitación en ⚙️ Configuración.');
     }
     const base = nomiWorkerBase();
+    const cuerpo = {
+        modelo: NoMiState.nomiModelo || NOMI_MODELO_POR_DEFECTO,
+        mensaje: String(mensaje || '')
+    };
+    if (herramienta && typeof herramienta === 'object') cuerpo.herramienta = herramienta;
     try {
         const datos = await hacerPeticion(base + '/v1/chat', {
             method: 'POST',
@@ -235,17 +250,54 @@ async function llamarIANoMi(mensaje, maxTokens) {
                 'Content-Type': 'application/json',
                 'Authorization': 'Bearer ' + NoMiState.nomiToken
             },
-            body: JSON.stringify({
-                modelo: NoMiState.nomiModelo || NOMI_MODELO_POR_DEFECTO,
-                mensaje: String(mensaje || '')
-            })
+            body: JSON.stringify(cuerpo)
         });
         if (datos && typeof datos.respuesta === 'string') return datos.respuesta;
         throw new Error((datos && datos.error && datos.error.message) || 'Respuesta inesperada del Worker NoMi.');
     } catch (err) {
-        const status = err && typeof err.status === 'number' ? err.status : null;
-        const es401 = status === 401 || (err && err.message && /401/.test(err.message)) || (err instanceof NoMiTokenInvalidoError);
-        if (es401) {
+        if (esError401NoMi(err)) {
+            setNomiAccesoActivo(false);
+            throw new NoMiTokenInvalidoError('Tu token de acceso NoMi es inválido o fue revocado. Vuelve a activarlo en ⚙️ Configuración.');
+        }
+        throw err;
+    }
+}
+
+// Estados explícitos que la ruta de clima del Worker reporta en `climaEstado`.
+const ESTADOS_CLIMA_NO_MI = ['ok', 'ciudad_no_encontrada', 'limite_diario', 'fallo_proveedor'];
+
+// Llama a la ruta de clima del Worker y devuelve { texto, estado } con estado
+// ∈ ok | ciudad_no_encontrada | limite_diario | fallo_proveedor. La señal es
+// explícita: el cliente NUNCA infiere el resultado del texto humano. Con un
+// Worker anterior sin `climaEstado` se asume 'ok' (compatibilidad hacia atrás).
+// Errores HTTP/red idénticos a llamarIANoMi (401 → NoMiTokenInvalidoError, sin
+// fallback); NO altera llamarIANoMi ni el chat normal.
+async function llamarClimaNoMi(texto, ubicacion) {
+    if (!NoMiState.nomiToken) {
+        throw new NoMiTokenInvalidoError('No hay token de acceso NoMi. Actívalo con un código de invitación en ⚙️ Configuración.');
+    }
+    const base = nomiWorkerBase();
+    const cuerpo = {
+        modelo: NoMiState.nomiModelo || NOMI_MODELO_POR_DEFECTO,
+        mensaje: String(texto || ''),
+        herramienta: { tipo: 'clima', ubicacion: String(ubicacion || '') },
+    };
+    try {
+        const datos = await hacerPeticion(base + '/v1/chat', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + NoMiState.nomiToken,
+            },
+            body: JSON.stringify(cuerpo),
+        });
+        if (datos && typeof datos.respuesta === 'string') {
+            const estado = ESTADOS_CLIMA_NO_MI.indexOf(datos.climaEstado) >= 0 ? datos.climaEstado : 'ok';
+            return { texto: datos.respuesta, estado };
+        }
+        throw new Error((datos && datos.error && datos.error.message) || 'Respuesta inesperada del Worker NoMi.');
+    } catch (err) {
+        if (esError401NoMi(err)) {
             setNomiAccesoActivo(false);
             throw new NoMiTokenInvalidoError('Tu token de acceso NoMi es inválido o fue revocado. Vuelve a activarlo en ⚙️ Configuración.');
         }

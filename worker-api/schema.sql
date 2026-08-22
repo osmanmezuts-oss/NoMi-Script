@@ -55,3 +55,13 @@ CREATE TABLE IF NOT EXISTS configuracion (
     clave TEXT PRIMARY KEY,
     valor TEXT NOT NULL
 );
+
+-- Contador diario de clima (Fase 2). Separado de la cuota mensual y de la bolsa
+-- global de Groq. Máximo 20 consultas por usuario y día UTC. NO guarda la ciudad
+-- ni la respuesta (solo el recuento atómico por usuario+día).
+CREATE TABLE IF NOT EXISTS uso_clima_diario (
+    usuario_id TEXT NOT NULL,
+    dia TEXT NOT NULL,                 -- 'YYYY-MM-DD' (UTC)
+    solicitudes INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (usuario_id, dia)
+);

@@ -423,15 +423,29 @@ test('admin/liberar con ReadableStream sin Content-Length que excede el límite 
     assert.equal((await r.json()).error, 'parametros-invalidos');
 });
 
-// ---- MAX_ENTRADA_BYTES efectivo: entrada + salida + margen cabe bajo tokens/minuto ----
-test('MAX_ENTRADA_BYTES garantiza entrada + salida + margen bajo tokens_por_minuto', async () => {
+// ---- MAX_ENTRADA_BYTES efectivo: entrada + sistema + salida + margen cabe bajo tokens/minuto ----
+test('MAX_ENTRADA_BYTES garantiza entrada + sistema + salida + margen bajo tokens_por_minuto', async () => {
     const { RESERVA, LIMITES_GROQ } = await import('../src/limites.js');
     assert.equal(
-        RESERVA.MAX_ENTRADA_BYTES * RESERVA.TOKENS_POR_BYTE_ENTRADA + RESERVA.MAX_SALIDA_TOKENS + RESERVA.MARGEN_TOKEN,
+        RESERVA.MAX_ENTRADA_BYTES * RESERVA.TOKENS_POR_BYTE_ENTRADA + RESERVA.SISTEMA_TOKENS + RESERVA.MAX_SALIDA_TOKENS + RESERVA.MARGEN_TOKEN,
         LIMITES_GROQ.tokens_por_minuto,
         'el peor caso debe caber exactamente bajo el límite del proveedor'
     );
     assert.ok(RESERVA.MAX_ENTRADA_BYTES > 0);
+});
+
+// ---- El presupuesto conservador cubre el mensaje de sistema real añadido por llamarGroq ----
+test('el presupuesto cubre el mensaje de sistema añadido por llamarGroq', async () => {
+    const { RESERVA, SISTEMA_SIN_HERRAMIENTAS, LIMITES_GROQ } = await import('../src/limites.js');
+    assert.ok(SISTEMA_SIN_HERRAMIENTAS.length > 0, 'existe el mensaje de sistema');
+    const sistemaTokens = Math.ceil(new TextEncoder().encode(SISTEMA_SIN_HERRAMIENTAS).length * RESERVA.TOKENS_POR_BYTE_ENTRADA);
+    assert.ok(sistemaTokens > 0, 'el mensaje de sistema aporta tokens');
+    assert.ok(RESERVA.SISTEMA_TOKENS >= sistemaTokens, 'la reserva cubre el mensaje real de sistema: ' + RESERVA.SISTEMA_TOKENS + ' >= ' + sistemaTokens);
+    // La peor entrada máxima sigue cabiendo bajo tokens/minuto contando el sistema.
+    assert.ok(
+        RESERVA.MAX_ENTRADA_BYTES * RESERVA.TOKENS_POR_BYTE_ENTRADA + RESERVA.SISTEMA_TOKENS + RESERVA.MAX_SALIDA_TOKENS + RESERVA.MARGEN_TOKEN <= LIMITES_GROQ.tokens_por_minuto,
+        'entrada máxima + sistema + salida + margen no supera tokens_por_minuto'
+    );
 });
 
 // ---- Límite global de invitados: no se activa el usuario número 11 ----
