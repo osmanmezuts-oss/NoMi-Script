@@ -212,57 +212,6 @@ function detectarClimaNoMi(texto) {
     return null;
 }
 
-// Detecta solicitudes de búsqueda web en modo NoMi (Tavily SOLO vía Worker).
-// Devuelve la consulta a buscar o null (el chat sigue su flujo normal).
-// - Comandos explícitos ("busca X", "investiga X"): SIEMPRE activan, sin exigir !search.
-// - Auto-detección: intención informativa inequívoca con marcador de recencia en
-//   el MISMO texto (aunque haya palabras intermedias entre ambos) o los patrones
-//   compuestos existentes. Palabras genéricas aisladas ("noticias", "precio",
-//   "eventos") NO activan nada por sí solas para evitar falsos positivos; la
-//   recencia explícita (hoy, actual, últimas, esta semana, recientemente…) es
-//   imprescindible. El clima tiene prioridad y se evalúa antes en preguntar().
-function detectarBusquedaNoMi(texto) {
-    if (typeof texto !== 'string' || !texto.trim()) return null;
-    const t = texto.trim();
-    const mComando = t.match(/^(?:busca|buscar|investiga|investigar)\b\s*[:|]?\s*(.+)$/i);
-    if (mComando) {
-        const consulta = mComando[1].trim().replace(/^["']+|["']+$/g, '');
-        return consulta.length >= 2 ? consulta : null;
-    }
-    const patronesTemporales = [
-        /\b(?:noticias|novedades|actualidad)\s+(?:de|del|sobre|acerca\s+de)\s+\S/i,
-        /\b[uú]ltim[ao]s?\s+(?:hora|horas|noticias?|novedades)\b/i,
-        /\bqu[eé]\s+(?:ha\s+)?pasado\b[\s\S]*\b(?:hoy|ayer|anoche|esta\s+semana|recientemente)\b/i,
-        /\bqui[eé]n\s+gan[oó]\b[\s\S]*\b(?:hoy|ayer|anoche|esta\s+semana)\b/i,
-        /\b(?:hoy|ayer|anoche|esta\s+semana|este\s+fin\s+de\s+semana)\b[\s\S]{0,60}\b(?:partido|resultad[oa]s?|final(?:es)?|elecci[oó]n(?:es)?|lanzamiento)\b/i,
-        /\b(?:precio|cotizaci[oó]n)\s+(?:actual|hoy|de\s+hoy|del\s+d[ií]a)\b/i,
-    ];
-    for (const re of patronesTemporales) {
-        if (re.test(t)) return t;
-    }
-    // Intención informativa + marcador de recencia en el mismo texto, aunque haya
-    // palabras intermedias (p. ej. "dime las noticias destacadas de Bolivia hoy").
-    // Los bordes usan clases EXTERNAS a \b porque en JS los acentos/ñ NO son \w
-    // (\b fallaría pegado a "ú", "ó", "ñ"); así "últimas" o "ganó" se reconocen.
-    // Palabras aisladas sin recencia (p. ej. "me gustan las noticias antiguas",
-    // "historia de Bolivia") quedan bloqueadas.
-    const inicioPalabra = '(?:^|[\\s¿¡(“"])';
-    const finPalabra = '(?=$|[\\s?.,!;:)”…])';
-    const intencionInformativa = new RegExp(
-        inicioPalabra + '(?:noticias?|titulares?|actualidad|novedades?|precios?|cotizaci[oó]n|resultados?|eventos?)' + finPalabra,
-        'i'
-    );
-    const marcadorRecencia = new RegExp(
-        inicioPalabra + '(?:hoy|actual(?:es)?|[uú]ltim[ao]s?|recientemente|ayer|anoche|esta\\s+semana|este\\s+fin\\s+de\\s+semana)' + finPalabra,
-        'i'
-    );
-    const recenciaPosPreposicion = /(?:de\s+hoy|del\s+d[ií]a)(?=$|[\s?.,!;:])/i;
-    if (intencionInformativa.test(t) && (marcadorRecencia.test(t) || recenciaPosPreposicion.test(t))) {
-        return t;
-    }
-    return null;
-}
-
 // Maneja una consulta de clima en modo NoMi: llama al Worker con `herramienta`
 // y pinta la respuesta breve. El Worker nunca pasa por Groq ni usa Tavily.
 async function manejarClimaNoMi(texto, ubicacion) {
@@ -323,91 +272,18 @@ async function manejarClimaNoMi(texto, ubicacion) {
     actualizarHud();
 }
 
-// Versión de texto plano (para el historial persistente) de los resultados de
-// búsqueda: incluye título, URL y snippet. Se guarda SOLO en el localStorage del
-// usuario; nunca viaja al servidor ni a diagnósticos.
-function construirTextoBusquedaPlano(resultados) {
-    const lista = Array.isArray(resultados) ? resultados.slice(0, 3) : [];
-    if (lista.length === 0) return 'No encontré resultados útiles en la web.';
-    const lineas = ['Esto es lo que encontré en la web:'];
-    lista.forEach((r, i) => {
-        lineas.push((i + 1) + '. ' + (r.titulo || '(sin título)'));
-        const urlPlana = nomiUrlFuenteSegura(r.url);
-        if (urlPlana) lineas.push('   ' + urlPlana);
-        if (r.contenido) lineas.push('   ' + r.contenido);
+// Texto persistente de una respuesta web sintetizada. Conserva los enlaces para
+// los seguimientos, pero no guarda ni muestra el volcado de snippets de Tavily.
+function construirRespuestaConFuentesPlano(texto, fuentes) {
+    const lineas = [String(texto || '')];
+    const lista = Array.isArray(fuentes) ? fuentes.slice(0, 3) : [];
+    if (lista.length) lineas.push('', 'Fuentes:');
+    lista.forEach((fuente, indice) => {
+        const url = nomiUrlFuenteSegura(fuente && fuente.url);
+        const titulo = fuente && fuente.titulo ? String(fuente.titulo) : 'Fuente web';
+        lineas.push('[' + (indice + 1) + '] ' + titulo + (url ? ' — ' + url : ''));
     });
     return lineas.join('\n');
-}
-
-// Maneja una búsqueda web en modo NoMi: llama al Worker con
-// `herramienta: { tipo: 'busqueda', consulta }` (Tavily SOLO en el Worker, sin
-// clave del usuario) y pinta hasta 3 resultados con fuentes seguras. El Worker
-// nunca pasa por Groq ni usa Tavily local de API Personal. Señal explícita
-// `busquedaEstado`: ok | sin_resultados | limite_diario | fallo_proveedor
-// (| actualizacion_requerida si el Worker aún no soporta la herramienta).
-async function manejarBusquedaNoMi(texto, consulta) {
-    NoMiState.isWaiting = true;
-    deshabilitarControlesEnvio();
-    actualizarHud();
-    NoMiState.historial.push({ role: 'user', content: texto });
-    guardarHistorial(NoMiState.historial);
-    agregarMensaje('yo', texto);
-    mostrarCargando();
-    try {
-        const res = await llamarBusquedaNoMi(consulta);
-        ocultarCargando();
-        if (res.estado === 'fallo_proveedor') {
-            // Fallo temporal de Tavily/red (el Worker ya revirtió la cuota):
-            // mismo tratamiento blando y reintentable que una caída de red,
-            // conservando el mensaje humano recibido.
-            NoMiState.historial.pop();
-            guardarHistorial(NoMiState.historial);
-            const dispFallo = document.getElementById('nomi-modelo-display');
-            if (dispFallo) dispFallo.textContent = '⚠️ error';
-            agregarMensaje('bot', res.texto);
-            NoMiState.reintentarPregunta = texto;
-            mapearErrorHudNoMi({}); // estado HUD 'sin_conexion' -> botón "Reintentar"
-            // Sin contenido de la consulta en el diagnóstico (privacidad).
-            registrarError('network', 'Búsqueda NoMi: fallo temporal del proveedor (Tavily).', `Modo: NoMi (busqueda), URL: ${NoMiState.nomiWorkerUrl}`);
-        } else if (res.estado === 'ok') {
-            NoMiState.contadorPreguntas++;
-            setContador(NoMiState.contadorPreguntas);
-            NoMiState.historial.push({ role: 'assistant', content: construirTextoBusquedaPlano(res.resultados) });
-            guardarHistorial(NoMiState.historial);
-            agregarMensajeConFuentes(res.resultados);
-            NoMiState.reintentarPregunta = '';
-            actualizarStats();
-        } else {
-            // sin_resultados / limite_diario: atendidos y contabilizados.
-            // consulta_invalida / actualizacion_requerida: informativos, sin
-            // contar pregunta y sin reintento.
-            NoMiState.historial.push({ role: 'assistant', content: res.texto });
-            guardarHistorial(NoMiState.historial);
-            agregarMensaje('bot', res.texto);
-            NoMiState.reintentarPregunta = '';
-            if (res.estado === 'sin_resultados' || res.estado === 'limite_diario') {
-                NoMiState.contadorPreguntas++;
-                setContador(NoMiState.contadorPreguntas);
-            }
-            actualizarStats();
-        }
-    } catch (error) {
-        ocultarCargando();
-        NoMiState.historial.pop();
-        guardarHistorial(NoMiState.historial);
-        const disp = document.getElementById('nomi-modelo-display');
-        if (disp) disp.textContent = '⚠️ error';
-        // Igual que el chat NoMi normal: la pregunta queda guardada para el
-        // reintento explícito del HUD ("Reintentar"). mapearErrorHudNoMi la
-        // limpia en 401 (acceso inválido no es reintentable).
-        NoMiState.reintentarPregunta = texto;
-        agregarMensaje('bot', mensajeHumanoErrorNoMi(error));
-        mapearErrorHudNoMi(error);
-        registrarError('network', error.message, `Modo: NoMi (busqueda), URL: ${NoMiState.nomiWorkerUrl}`);
-    }
-    restaurarControlesEnvio();
-    NoMiState.isWaiting = false;
-    actualizarHud();
 }
 
 // Defensa en profundidad (respaldo, no el mecanismo principal): si un modelo
@@ -419,6 +295,11 @@ function esRespuestaComandoInseguro(texto) {
 }
 
 async function preguntar(texto) {
+    // La lupa aplica solo a este envío. Se consume incluso si clima gana o el
+    // acceso falla, para que no se filtre accidentalmente a la pregunta siguiente.
+    const forzarBusquedaSolicitada = NoMiState.busquedaForzada === true;
+    NoMiState.busquedaForzada = false;
+    NoMiState.reintentarBusquedaForzada = false;
     if (NoMiState.modoAcceso === MODO_ACCESO_NOMI) {
         // Modo explícito NoMi: exige token Y acceso activo. Sin eso, informa y
         // NO se hace ninguna petición HTTP (tampoco fallback a OpenRouter).
@@ -442,18 +323,6 @@ async function preguntar(texto) {
             await manejarClimaNoMi(texto, ubicacionClima);
             return;
         }
-        // Búsqueda web NoMi (Tavily SOLO en el Worker): el clima tiene prioridad
-        // (arriba). Sin fallback a API Personal y sin usar la clave Tavily local
-        // del usuario; desactivable con la preferencia "Búsqueda web NoMi".
-        if (!ubicacionClima && NoMiState.nomiToken && NoMiState.nomiAccesoActivo && NoMiState.busquedaWebNomi) {
-            const consultaWeb = detectarBusquedaNoMi(texto);
-            if (consultaWeb) {
-                const inputBusq = document.getElementById('nomi-input');
-                if (inputBusq) inputBusq.value = '';
-                await manejarBusquedaNoMi(texto, consultaWeb);
-                return;
-            }
-        }
     } else if (!NoMiState.credencialesCargadas || !NoMiState.apiKeyActual) {
         agregarMensaje('bot', '⚠️ **No hay credenciales configuradas.**\n\nPor favor, ve al menú (⚙️) y configura tu API Personal (URL base + API key) o importa un archivo `.enc`.\n\nMientras tanto, puedes usar comandos básicos como `!cmd` para ver la lista de comandos disponibles.');
         return;
@@ -472,10 +341,10 @@ async function preguntar(texto) {
     }
 
     // En modo NoMi la búsqueda web legada (procesarBusqueda/buscarWeb con clave
-    // Tavily local o API Personal) NUNCA aplica —ni con preferencia NoMi activada
-    // ni desactivada—: comandos, auto-detección y busquedaForzada siguen SIEMPRE
-    // el chat NoMi normal, conforme al texto de la preferencia en la UI.
+    // Tavily local o API Personal) NUNCA aplica. La preferencia habilita la
+    // decisión semántica del modelo y la lupa fuerza una única búsqueda vía Worker.
     const modoNoMi = NoMiState.modoAcceso === MODO_ACCESO_NOMI;
+    const forzarBusquedaNoMi = modoNoMi && forzarBusquedaSolicitada;
     const cmdBusqueda = !modoNoMi ? texto.match(/^(investiga|busca|investigar|buscar)\s*[:|]?\s*(.+)/i) : null;
     let esBusqueda = false, consulta = '';
     if (cmdBusqueda) {
@@ -485,12 +354,9 @@ async function preguntar(texto) {
             if (!NoMiState.busquedaWebActiva) NoMiState.busquedaWebTemporal = true;
         }
     }
-    if (NoMiState.busquedaForzada) {
-        NoMiState.busquedaForzada = false; // se consume siempre para no fugarse a Personal después
-        if (!modoNoMi) {
-            esBusqueda = true; consulta = texto.trim();
-            if (!NoMiState.busquedaWebActiva) NoMiState.busquedaWebTemporal = true;
-        }
+    if (forzarBusquedaSolicitada && !modoNoMi) {
+        esBusqueda = true; consulta = texto.trim();
+        if (!NoMiState.busquedaWebActiva) NoMiState.busquedaWebTemporal = true;
     }
     if (!esBusqueda && !modoNoMi && NoMiState.busquedaWebActiva && requiereBusqueda(texto)) {
         esBusqueda = true; consulta = texto.trim();
@@ -542,6 +408,14 @@ async function preguntar(texto) {
     let mensajeCompleto = texto;
     if (infoPagina) mensajeCompleto = infoPagina + '\nPregunta del usuario: ' + texto;
     const mensajeFinal = `${contextoCompleto}\n\nPregunta del usuario: ${mensajeCompleto}`;
+    // Debe construirse ANTES de añadir la pregunta al historial: así el turno
+    // actual aparece una sola vez y los seguimientos conservan solo antecedentes.
+    // Con búsqueda habilitada se reservan además el sistema semántico y el
+    // schema de la herramienta bajo el límite Groq de 8000 TPM. 5000 bytes deja
+    // margen para ambos sin reducir la salida máxima ni provocar un 400 tardío.
+    const habilitarBusquedaNoMi = NoMiState.busquedaWebNomi === true || forzarBusquedaNoMi;
+    const maxBytesWorkerNoMi = habilitarBusquedaNoMi ? 5000 : 6000;
+    const mensajeWorkerNoMi = modoNoMi ? construirMensajeWorkerNoMi(mensajeFinal, maxBytesWorkerNoMi) : '';
 
     NoMiState.historial.push({role: 'user', content: texto});
     guardarHistorial(NoMiState.historial);
@@ -551,6 +425,7 @@ async function preguntar(texto) {
 
     try {
         let respuestaTexto;
+        let resultadoNoMi = null;
         if (NoMiState.modoAcceso === MODO_ACCESO_NOMI) {
             // Modo explícito "Acceso compartido NoMi": usa el Worker (Bearer token).
             // El mensaje conserva continuidad (persona + resumen + turnos recientes
@@ -558,7 +433,36 @@ async function preguntar(texto) {
             // respeta el límite de bytes del Worker.
             actualizarIndicadorProveedor();
             document.getElementById('nomi-modelo-display').textContent = NoMiState.nomiModelo || NOMI_MODELO_POR_DEFECTO;
-            respuestaTexto = await llamarIANoMi(construirMensajeWorkerNoMi(mensajeFinal));
+            resultadoNoMi = await llamarIANoMiSemantico(
+                mensajeWorkerNoMi,
+                habilitarBusquedaNoMi,
+                forzarBusquedaNoMi,
+            );
+            respuestaTexto = resultadoNoMi.texto;
+
+            if (resultadoNoMi.estadoBusqueda === 'fallo_proveedor'
+                || resultadoNoMi.estadoBusqueda === 'fallo_sintesis') {
+                // Fallo temporal de Tavily (con rollback) o de la síntesis Groq
+                // posterior (Tavily sí consumió cupo). En ambos casos se conserva
+                // la pregunta para un reintento explícito y forzado.
+                ocultarCargando();
+                NoMiState.historial.pop();
+                guardarHistorial(NoMiState.historial);
+                const dispFallo = document.getElementById('nomi-modelo-display');
+                if (dispFallo) dispFallo.textContent = '⚠️ error';
+                agregarMensaje('bot', respuestaTexto);
+                NoMiState.reintentarPregunta = texto;
+                // El modelo ya decidió que necesitaba la web: el botón debe
+                // reintentar la herramienta, no volver a dejarlo a criterio.
+                NoMiState.reintentarBusquedaForzada = true;
+                mapearErrorHudNoMi({});
+                const etapaFallo = resultadoNoMi.estadoBusqueda === 'fallo_sintesis' ? 'síntesis Groq' : 'Tavily';
+                registrarError('network', `Búsqueda NoMi: fallo temporal de ${etapaFallo}.`, `Modo: NoMi, URL: ${NoMiState.nomiWorkerUrl}`);
+                restaurarControlesEnvio();
+                NoMiState.isWaiting = false;
+                actualizarHud();
+                return;
+            }
         } else {
             // Chat Personal (OpenAI-compatible): /chat/completions con la URL
             // base configurada. Los headers HTTP-Referer/X-Title solo se envían
@@ -622,12 +526,25 @@ async function preguntar(texto) {
         }
         // Ruta de éxito común a ambos modos.
         ocultarCargando();
-        NoMiState.contadorPreguntas++;
-        setContador(NoMiState.contadorPreguntas);
-        NoMiState.historial.push({role: 'assistant', content: respuestaTexto});
+        const estadoNoAtendido = resultadoNoMi
+            && (resultadoNoMi.estadoBusqueda === 'consulta_invalida'
+                || resultadoNoMi.estadoBusqueda === 'actualizacion_requerida');
+        if (!estadoNoAtendido) {
+            NoMiState.contadorPreguntas++;
+            setContador(NoMiState.contadorPreguntas);
+        }
+        const fuentesNoMi = resultadoNoMi && resultadoNoMi.estadoBusqueda === 'ok'
+            ? resultadoNoMi.fuentes
+            : [];
+        const respuestaHistorial = fuentesNoMi.length
+            ? construirRespuestaConFuentesPlano(respuestaTexto, fuentesNoMi)
+            : respuestaTexto;
+        NoMiState.historial.push({role: 'assistant', content: respuestaHistorial});
         guardarHistorial(NoMiState.historial);
-        agregarMensaje('bot', respuestaTexto);
+        if (fuentesNoMi.length) agregarMensajeConFuentes(respuestaTexto, fuentesNoMi);
+        else agregarMensaje('bot', respuestaTexto);
         NoMiState.reintentarPregunta = '';
+        NoMiState.reintentarBusquedaForzada = false;
         actualizarStats();
         // NoMi: tras respuesta exitosa, refresca cuota y limpia estado de error.
         if (NoMiState.modoAcceso === MODO_ACCESO_NOMI) await consultarUsoNoMi();
@@ -643,6 +560,7 @@ async function preguntar(texto) {
             // Error NoMi: un único mensaje humano; el detalle técnico queda solo
             // en registrarError(). La pregunta se guarda para reintento explícito.
             NoMiState.reintentarPregunta = texto;
+            NoMiState.reintentarBusquedaForzada = forzarBusquedaNoMi;
             agregarMensaje('bot', mensajeHumanoErrorNoMi(error));
             mapearErrorHudNoMi(error);
             registrarError('network', error.message, `Modo: NoMi, URL: ${NoMiState.nomiWorkerUrl}`);

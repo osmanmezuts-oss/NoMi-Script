@@ -77,9 +77,9 @@ function recortarUTF8Seguro(s, maxBytes) {
 //   3) El contexto (fecha/ubicación/página) se recorta ANTES que la pregunta.
 //   4) Resumen e historial solo se añaden si caben en el presupuesto restante.
 // No altera el contrato del Worker.
-function construirMensajeWorkerNoMi(promptActual) {
+function construirMensajeWorkerNoMi(promptActual, maxBytesPermitidos) {
     const separador = '\n\n';
-    const maxBytes = 6000;
+    const maxBytes = Number(maxBytesPermitidos) > 0 ? Number(maxBytesPermitidos) : 6000;
     const persona = NOMI_PERSONA_SISTEMA;
     const indicadorRecorte = '[pregunta recortada por límite de tamaño]';
 
@@ -130,25 +130,28 @@ function construirMensajeWorkerNoMi(promptActual) {
         }
     }
 
-    // 3) Historial reciente (del más reciente al más antiguo) mientras quepa.
+    // 3) Historial reciente: se priorizan los turnos más nuevos, pero se envían
+    // en orden cronológico para que referencias como "esas noticias" conserven
+    // correctamente su antecedente. La cabecera aparece una sola vez.
     if (headBudget > 0) {
         const limite = Math.min(NoMiState.contextoSeleccionado, CONTEXTO_RECIENTE);
         const recientes = NoMiState.historial
             .filter(m => m && (m.role === 'user' || m.role === 'assistant'))
             .slice(-limite);
-        const secciones = [];
+        const lineas = [];
+        const cabecera = 'Historial reciente:\n';
         for (let i = recientes.length - 1; i >= 0; i--) {
             const rol = recientes[i].role === 'user' ? 'Usuario' : 'Asistente';
-            const sec = (secciones.length === 0 ? 'Historial reciente (del más reciente al más antiguo):\n' : '') + rol + ': ' + recientes[i].content;
-            // El separador inicial (\n\n) antes de "Historial reciente..." se descuenta
-            // aquí para que el presupuesto coincida exactamente con lo concatenado.
-            const bloque = (secciones.length ? '\n' : separador) + sec;
+            const candidata = rol + ': ' + recientes[i].content;
+            const candidatas = [candidata, ...lineas];
+            const bloque = separador + cabecera + candidatas.join('\n');
             if (byteLengthUTF8(bloque) > headBudget) break;
-            secciones.push(sec);
-            headBudget -= byteLengthUTF8(bloque);
+            lineas.unshift(candidata);
         }
-        if (secciones.length) {
-            head += separador + secciones.slice().reverse().join('\n');
+        if (lineas.length) {
+            const bloque = separador + cabecera + lineas.join('\n');
+            head += bloque;
+            headBudget -= byteLengthUTF8(bloque);
         }
     }
 
@@ -269,20 +272,22 @@ function esError401NoMi(err) {
         || !!(err && err.message && /401/.test(err.message));
 }
 
-// Llama al chat del Worker. Devuelve el texto de la respuesta.
-// `herramienta` (opcional) permite rutas especiales del Worker (p. ej. clima) sin
-// pasar por Groq. Ante 401 marca el acceso como revocado y lanza
-// NoMiTokenInvalidoError (sin fallback).
-async function llamarIANoMi(mensaje, maxTokens, herramienta) {
+// Petición común al chat del Worker. `permitirBusqueda` solo habilita que Groq
+// decida semánticamente si necesita la herramienta del servidor; no envía claves
+// ni activa ningún flujo de API Personal.
+async function solicitarChatNoMi(mensaje, opciones) {
     if (!NoMiState.nomiToken) {
         throw new NoMiTokenInvalidoError('No hay token de acceso NoMi. Actívalo con un código de invitación en ⚙️ Configuración.');
     }
+    const opts = opciones && typeof opciones === 'object' ? opciones : {};
     const base = nomiWorkerBase();
     const cuerpo = {
         modelo: NoMiState.nomiModelo || NOMI_MODELO_POR_DEFECTO,
         mensaje: String(mensaje || '')
     };
-    if (herramienta && typeof herramienta === 'object') cuerpo.herramienta = herramienta;
+    if (opts.herramienta && typeof opts.herramienta === 'object') cuerpo.herramienta = opts.herramienta;
+    if (typeof opts.permitirBusqueda === 'boolean') cuerpo.permitirBusqueda = opts.permitirBusqueda;
+    if (opts.forzarBusqueda === true) cuerpo.forzarBusqueda = true;
     try {
         const datos = await hacerPeticion(base + '/v1/chat', {
             method: 'POST',
@@ -292,7 +297,7 @@ async function llamarIANoMi(mensaje, maxTokens, herramienta) {
             },
             body: JSON.stringify(cuerpo)
         });
-        if (datos && typeof datos.respuesta === 'string') return datos.respuesta;
+        if (datos && typeof datos.respuesta === 'string') return datos;
         throw new Error((datos && datos.error && datos.error.message) || 'Respuesta inesperada del Worker NoMi.');
     } catch (err) {
         if (esError401NoMi(err)) {
@@ -301,6 +306,40 @@ async function llamarIANoMi(mensaje, maxTokens, herramienta) {
         }
         throw err;
     }
+}
+
+// Contrato histórico: devuelve únicamente texto para resumen y otras llamadas.
+async function llamarIANoMi(mensaje, maxTokens, herramienta) {
+    const datos = await solicitarChatNoMi(mensaje, { herramienta });
+    return datos.respuesta;
+}
+
+// Chat NoMi nuevo: devuelve la respuesta junto con la señal estable de búsqueda
+// y fuentes compactas. Si se pidió navegación y falta la señal del protocolo,
+// no se muestra como actual una respuesta de un Worker antiguo.
+async function llamarIANoMiSemantico(mensaje, permitirBusqueda, forzarBusqueda) {
+    const busquedaPermitida = permitirBusqueda === true || forzarBusqueda === true;
+    const datos = await solicitarChatNoMi(mensaje, {
+        permitirBusqueda: busquedaPermitida,
+        forzarBusqueda: forzarBusqueda === true,
+    });
+    if (busquedaPermitida && datos.busquedaProtocolo !== 1) {
+        return {
+            texto: 'La búsqueda web NoMi necesita actualizar el servidor antes de responder con información actual.',
+            estadoBusqueda: 'actualizacion_requerida',
+            fuentes: [],
+        };
+    }
+    const estados = ['ok', 'sin_resultados', 'limite_diario', 'fallo_proveedor', 'fallo_sintesis', 'consulta_invalida', 'actualizacion_requerida'];
+    const estadoBusqueda = estados.indexOf(datos.busquedaEstado) >= 0 ? datos.busquedaEstado : null;
+    const fuentes = Array.isArray(datos.fuentes)
+        ? datos.fuentes.slice(0, 3).map(f => ({
+            titulo: typeof f.titulo === 'string' ? f.titulo : '',
+            url: typeof f.url === 'string' ? f.url : '',
+            fecha: typeof f.fecha === 'string' ? f.fecha : '',
+        }))
+        : [];
+    return { texto: datos.respuesta, estadoBusqueda, fuentes };
 }
 
 // Estados explícitos que la ruta de clima del Worker reporta en `climaEstado`.
@@ -340,108 +379,6 @@ async function llamarClimaNoMi(texto, ubicacion) {
         if (esError401NoMi(err)) {
             setNomiAccesoActivo(false);
             throw new NoMiTokenInvalidoError('Tu token de acceso NoMi es inválido o fue revocado. Vuelve a activarlo en ⚙️ Configuración.');
-        }
-        throw err;
-    }
-}
-
-// Estados explícitos que la ruta de búsqueda del Worker reporta en `busquedaEstado`.
-const ESTADOS_BUSQUEDA_NO_MI = ['ok', 'sin_resultados', 'limite_diario', 'fallo_proveedor'];
-
-// Mensaje claro cuando el Worker desplegado aún no conoce la herramienta
-// 'busqueda' (rechazo 400 parametros-invalidos) o responde sin la señal esperada.
-// SIN fallback a API Personal y SIN usar claves locales; solo informa.
-function respuestaActualizacionRequerida() {
-    return {
-        estado: 'actualizacion_requerida',
-        texto: 'Tu acceso NoMi necesita una actualización del servidor para usar la búsqueda web. Avisa al administrador para actualizar el Worker.',
-    };
-}
-
-// Validación local de la consulta, IDÉNTICA a la del Worker: si falla aquí,
-// ni siquiera se llama al Worker (y un 400 remoto jamás será por esto).
-function consultaBusquedaValidaLocal(consulta) {
-    const c = String(consulta || '').trim();
-    if (c.length < 2 || c.length > 300) return false;
-    return new TextEncoder().encode(c).length <= 600;
-}
-
-// Extrae `error` del cuerpo JSON que hacerPeticion adjunta en err.message
-// ("Error <status>: <cuerpo JSON>"). Parsing ESTRUCTURADO defensivo: si no hay
-// JSON válido devuelve null (el caller aplica su caso genérico). Nunca se
-// interpreta texto humano libre para decidir estados.
-function extraerCodigoErrorCuerpo(err) {
-    try {
-        const m = err && typeof err.message === 'string' ? err.message.match(/^\s*Error\s+\d+:\s*([\s\S]+)$/) : null;
-        if (!m) return null;
-        const datos = JSON.parse(m[1]);
-        return datos && typeof datos.error === 'string' ? datos.error : null;
-    } catch {
-        return null;
-    }
-}
-
-// Llama a la ruta de búsqueda del Worker y devuelve:
-//   { estado: 'ok', resultados: [{ titulo, url, contenido }] }  (máx. 3)
-//   { estado, texto } con estado ∈ sin_resultados | limite_diario |
-//                         fallo_proveedor | consulta_invalida |
-//                         actualizacion_requerida.
-// La señal es explícita (`busquedaEstado`): NUNCA se infiere del texto humano.
-// Un HTTP 400 se distingue por CÓDIGO estable del cuerpo JSON:
-//   - 'consulta-busqueda-invalida' -> Worker ACTUAL rechazando la consulta
-//     (defensa; la validación local ya debería evitarlo) -> mensaje humano de
-//     validación, sin reintento ni falso aviso de actualización.
-//   - cualquier otro / sin JSON    -> Worker ANTIGUO que no conoce la
-//     herramienta -> actualización requerida.
-// Errores HTTP/red idénticos a llamarIANoMi (401 → NoMiTokenInvalidoError, sin
-// fallback). NO altera llamarIANoMi ni el chat normal ni API Personal.
-async function llamarBusquedaNoMi(consulta) {
-    if (!NoMiState.nomiToken) {
-        throw new NoMiTokenInvalidoError('No hay token de acceso NoMi. Actívalo con un código de invitación en ⚙️ Configuración.');
-    }
-    // P1-2: validación local antes de red. Con la consulta ya validada, un 400
-    // remoto SOLO puede venir de un Worker que no conoce la herramienta.
-    if (!consultaBusquedaValidaLocal(consulta)) {
-        return { estado: 'consulta_invalida', texto: 'Esa búsqueda no es válida. Indica qué buscar entre 2 y 300 caracteres.' };
-    }
-    const base = nomiWorkerBase();
-    const cuerpo = {
-        modelo: NoMiState.nomiModelo || NOMI_MODELO_POR_DEFECTO,
-        mensaje: String(consulta),
-        herramienta: { tipo: 'busqueda', consulta: String(consulta) },
-    };
-    try {
-        const datos = await hacerPeticion(base + '/v1/chat', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + NoMiState.nomiToken,
-            },
-            body: JSON.stringify(cuerpo),
-        });
-        const estadoBruto = datos ? datos.busquedaEstado : undefined;
-        if (ESTADOS_BUSQUEDA_NO_MI.indexOf(estadoBruto) >= 0) {
-            if (estadoBruto === 'ok' && Array.isArray(datos.resultados)) {
-                return { estado: 'ok', resultados: datos.resultados };
-            }
-            if (estadoBruto !== 'ok' && typeof datos.respuesta === 'string') {
-                return { estado: estadoBruto, texto: datos.respuesta };
-            }
-        }
-        // 200 sin señal conocida: Worker antiguo/inesperado -> actualización requerida.
-        return respuestaActualizacionRequerida();
-    } catch (err) {
-        if (esError401NoMi(err)) {
-            setNomiAccesoActivo(false);
-            throw new NoMiTokenInvalidoError('Tu token de acceso NoMi es inválido o fue revocado. Vuelve a activarlo en ⚙️ Configuración.');
-        }
-        // P1-2: distinguir 400 por código estable del cuerpo JSON.
-        const status = err && typeof err.status === 'number' ? err.status : null;
-        if (status === 400) {
-            if (extraerCodigoErrorCuerpo(err) === 'consulta-busqueda-invalida') {
-                return { estado: 'consulta_invalida', texto: 'Esa búsqueda no es válida. Indica qué buscar entre 2 y 300 caracteres.' };
-            }
-            return respuestaActualizacionRequerida();
         }
         throw err;
     }

@@ -12,8 +12,8 @@ en el repositorio; solo referencia nombres de secretos/bindings.
   - `GROQ_API_KEY`
   - `ADMIN_SECRET`
   - `ACCESS_TOKEN_SECRET`
-  - `TAVILY_API_KEY` — **requerido solo para la herramienta de búsqueda web NoMi**
-    (`herramienta.tipo = 'busqueda'`). Vive SOLO como secreto del Worker: nunca se
+  - `TAVILY_API_KEY` — **requerido solo para la búsqueda web NoMi**.
+    Vive SOLO como secreto del Worker: nunca se
     expone en respuestas, nunca se acepta del cliente y NO sustituye a la clave
     Tavily local opcional de API Personal. Sin él, la búsqueda responde
     `fallo_proveedor` (con rollback de cupo); chat y clima no lo usan.
@@ -55,7 +55,7 @@ en el repositorio; solo referencia nombres de secretos/bindings.
 | POST | `/v1/activate` | Canjear invitación, devuelve token opaco |
 | GET | `/v1/catalog` | Catálogo de modelos (sin credenciales) |
 | GET | `/v1/usage` | Uso/cuota del invitado autenticado |
-| POST | `/v1/chat` | Chat vía Groq (modelo allowlist) **o herramientas sin Groq**: `clima` (Open-Meteo) y `busqueda` (Tavily en el Worker) |
+| POST | `/v1/chat` | Chat vía Groq (modelo allowlist), decisión semántica opcional de búsqueda web, o ruta directa de clima |
 | POST | `/admin/invitacion` | Crear invitación (requiere `ADMIN_SECRET`); acepta `etiqueta` opcional |
 | GET | `/admin/invitaciones` | Listar invitaciones (estado, id, fechas, etiqueta, usuario vinculado) |
 | POST | `/admin/revocar` | Revocar invitación por `id` (transaccional) |
@@ -89,12 +89,11 @@ códigos, hashes ni tokens de instalación.
  `parametros-invalidos`, `consulta-busqueda-invalida`, `admin-no-autorizado`,
  `no-encontrado`, `invitacion-ya-revocada`.
 
-## Herramientas de `/v1/chat` (sin Groq)
+## Herramientas de `/v1/chat`
 
-Si el cuerpo incluye `herramienta`, la petición NO pasa por Groq y NO consume
-cuota mensual, bolsa global ni el RateLimiterDO. Cada herramienta tiene un
-contador diario propio en D1 (atómico por usuario+día UTC, tope 20) y una señal
-explícita de resultado: el cliente NUNCA infiere el desenlace del texto humano.
+Clima y la ruta de búsqueda directa heredada reciben `herramienta` y no pasan
+por Groq. Cada herramienta externa tiene un contador diario propio en D1
+(atómico por usuario+día UTC, tope 20) y una señal explícita de resultado.
 
 ### Clima — Open-Meteo (`herramienta.tipo = "clima"`)
 - Cuerpo: `{ "tipo": "clima", "ubicacion": "<2–120 chars tras trim>" }`.
@@ -103,32 +102,58 @@ explícita de resultado: el cliente NUNCA infiere el desenlace del texto humano.
 - Un fallo del proveedor **revierte** el cupo diario; una ciudad no encontrada lo
   consume (la petición llegó al proveedor).
 
-### Búsqueda web — Tavily SOLO en el Worker (`herramienta.tipo = "busqueda"`)
-- Cuerpo: `{ "tipo": "busqueda", "consulta": "<2–300 chars, ≤600 bytes UTF-8>" }`;
-  excede → 400 `consulta-busqueda-invalida`.
+### Búsqueda web semántica — Groq + Tavily SOLO en el Worker
+- El cliente actual envía chat normal con `permitirBusqueda: true|false`; nunca
+  decide por palabras clave ni envía una consulta Tavily construida localmente.
+- La lupa puede enviar además `forzarBusqueda: true`: el Worker obliga una única
+  llamada a `busqueda_web`, incluso si la preferencia automática estaba apagada.
+- Con `true`, la primera llamada Groq recibe únicamente `busqueda_web` y decide
+  por significado/contexto si necesita datos actuales o verificables. Un
+  seguimiento debe convertir referencias como “esas noticias” en una consulta
+  autosuficiente con tema, lugar y periodo.
+- Si el modelo no pide la herramienta, su respuesta vuelve directamente: una
+  llamada Groq, cero Tavily. Si la pide, se acepta exactamente una llamada válida,
+  se consulta Tavily y una segunda llamada Groq sintetiza la evidencia. La segunda
+  no recibe tools, por lo que no existe bucle de búsquedas.
+- Cada llamada Groq se reserva y reconcilia por separado en DO, cuota D1 y bolsa.
+  Tavily mantiene su contador independiente de 20 búsquedas/día UTC.
+- Respuesta sintetizada: `busquedaEstado: "ok"`, `respuesta` y hasta 3 `fuentes`
+  compactas `{titulo, url, fecha}`. Los snippets internos (≤300 caracteres) no se
+  devuelven al navegador y también se acotan por bytes UTF-8 para respetar el
+  presupuesto Groq. URLs solo http/https y sin query/hash. Toda respuesta
+  del protocolo nuevo incluye `busquedaProtocolo: 1`.
+- Estados sin síntesis: `sin_resultados`, `limite_diario`, `fallo_proveedor`,
+  `fallo_sintesis` o `consulta_invalida`. Los dos fallos temporales permiten
+  reintento; `fallo_proveedor` revierte el cupo porque Tavily no respondió. En
+  `fallo_sintesis`, Tavily sí respondió y la búsqueda consume cupo para impedir
+  consultas externas ilimitadas mediante reintentos.
+- Tavily recibe `topic` (`general|news|finance`) y, si corresponde, `time_range`
+  (`day|week|month|year`) elegidos por el modelo y validados por el Worker.
 - Requiere el secreto `TAVILY_API_KEY` (nunca claves del usuario).
-- Estados (`busquedaEstado`): `ok` (+ `resultados`: máx. 3 `{titulo, url,
-  contenido}`, URLs solo http/https **sin query ni hash**) · `sin_resultados` ·
-  `limite_diario` · `fallo_proveedor` (5xx/red/401/403/429/**timeout 10 s**).
-- Un fallo del proveedor **revierte** el cupo diario; `sin_resultados` lo consume.
+- Compatibilidad con bundles anteriores: `herramienta: {tipo:"busqueda",
+  consulta}` sigue disponible y devuelve los resultados saneados sin síntesis,
+  conservando títulos ≤70 y snippets ≤110 para no volver verboso el HUD antiguo.
 
 ### Privacidad de las herramientas
 - D1 guarda SOLO recuentos atómicos (`uso_clima_diario`, `uso_busqueda_diario`);
   nunca ubicaciones, consultas, snippets, resultados ni respuestas.
 - No se loguean consultas ni resultados (`registrarEvidencia` no se invoca en estas rutas).
-- Proveedores externos: Open-Meteo recibe la ubicación; Tavily recibe la consulta.
-  Esto se comunica al usuario en la respuesta del cliente.
+- Proveedores externos: Open-Meteo recibe la ubicación; Groq recibe el contexto
+  conversacional y la evidencia saneada; Tavily recibe la consulta resuelta.
 
 ### Compatibilidad
-- Cliente nuevo + Worker antiguo: el Worker rechaza herramientas desconocidas con
-  400 `parametros-invalidos`; el cliente muestra “actualización del servidor” sin
-  crash ni fallback a API Personal.
+- Worker nuevo + bundle anterior: la ruta directa `herramienta.tipo="busqueda"`
+  sigue funcionando.
+- Bundle nuevo + Worker anterior: si se habilitó o forzó búsqueda, el cliente
+  detecta que falta `busquedaProtocolo: 1` y muestra que el servidor debe
+  actualizarse; no presenta una respuesta no verificada como información actual.
+  Por eso el Worker debe desplegarse primero.
 
 ## Pasos manuales de Cloudflare (orden recomendado)
 
-Desplegar en este orden: **migrar D1 → secretos → Worker → bundle**. El cliente
-nuevo con un Worker viejo degrada con un mensaje claro (“actualización del
-servidor”), pero las herramientas clima/búsqueda requieren este Worker.
+Desplegar en este orden: **migrar D1 → secretos → Worker → bundle**. El bundle
+nuevo con un Worker viejo conserva el chat, pero aún no puede buscar de forma
+semántica.
 
 1. Migrar D1 (idempotente; crea SOLO `uso_clima_diario` y `uso_busqueda_diario`,
    sin tocar tablas existentes):
@@ -139,7 +164,7 @@ servidor”), pero las herramientas clima/búsqueda requieren este Worker.
    solo se necesita para la búsqueda web NoMi.
 3. Desplegar el Worker: `npx wrangler deploy` (desde `worker-api/`).
 4. Solo después, distribuir el bundle generado (`NoMi Asistente V5.8.user.js`,
-   versión 5.17), que ya incluye las herramientas y su detección.
+   versión 5.17), que ya incluye el permiso de búsqueda semántica.
 
 El Durable Object ya está declarado en `wrangler.toml` (`RATE_LIMITER`).
 

@@ -1,11 +1,8 @@
-// Pruebas de cliente del bloque de búsqueda web NoMi (Tavily SOLO vía Worker).
-// Cubre: detector conservador (comandos siempre; auto-detección temporal
-// inequívoca), prioridad del clima, envío de herramienta 'busqueda' sin
-// credenciales personales ni clave Tavily local, preferencia desactivada,
-// Personal intacto, Worker antiguo (actualización requerida sin crash ni
-// fallback), reintento único en fallo_proveedor/red y render seguro de fuentes.
-// Ejecutar:
-//   node modules/test/run-nomi-busqueda.cjs
+// Pruebas de cliente de búsqueda web semántica NoMi (Tavily SOLO vía Worker).
+// Cubre: decisión delegada al modelo sin palabras obligatorias, continuidad,
+// pregunta no duplicada, prioridad del clima, preferencia desactivada, API
+// Personal intacta, reintento y render seguro/compacto de fuentes.
+// Ejecutar: node modules/test/run-nomi-busqueda.cjs
 
 const fs = require('fs');
 const path = require('path');
@@ -61,14 +58,17 @@ function buscar(root, sel, firstOnly) {
     })(root);
     return firstOnly ? out[0] || null : out;
 }
+
 function matchSel(node, sel) {
-    if (!sel) return false; sel = sel.trim();
+    if (!sel) return false;
+    sel = sel.trim();
     if (sel.startsWith('#')) return node.id === sel.slice(1);
     if (sel.startsWith('.')) return (node.className || '').split(/\s+/).includes(sel.slice(1));
-    let m = sel.match(/^([a-zA-Z0-9]+)?\[([a-zA-Z0-9_-]+)="([^"]*)"\]$/);
+    const m = sel.match(/^([a-zA-Z0-9]+)?\[([a-zA-Z0-9_-]+)="([^"]*)"\]$/);
     if (m) { const tagOk = !m[1] || node.tagName === m[1].toUpperCase(); return tagOk && node.getAttribute(m[2]) === m[3]; }
     return node.tagName === sel.toUpperCase();
 }
+
 const documento = {
     body: makeEl('body'),
     createElement: (t) => makeEl(t),
@@ -94,10 +94,8 @@ const ctx = {
 };
 ctx.window = ctx;
 ctx.document = documento;
-ctx.limpiarBody = () => { documento.body = makeEl('body'); };
 vm.createContext(ctx);
 
-// Módulos en orden de build.
 const fuentes = [
     leer('nomi-config-estatica.js'), leer('nomi-deteccion-sistema.js'), leer('nomi-criptografia.js'),
     leer('nomi-procesamiento-lenguaje.js'), leer('nomi-state.js'), leer('nomi-utilities.js'),
@@ -113,7 +111,6 @@ const pruebas = `
     let botMsgs = [];
     const _agregar = agregarMensaje;
     agregarMensaje = (quien, texto) => { if (quien === 'bot') botMsgs.push(texto); };
-
     crearVentanaChat();
 
     function activarNoMi() {
@@ -126,222 +123,219 @@ const pruebas = `
         NoMiState.isWaiting = false;
         NoMiState.historial = [];
         NoMiState.reintentarPregunta = '';
+        NoMiState.reintentarBusquedaForzada = false;
+        NoMiState.estadoHud = null;
         NoMiState.busquedaWebActiva = false;
-        NoMiState.busquedaWebNomi = getBusquedaWebNomi();
+        setBusquedaWebNomi(true);
     }
 
-    // ===== 1) Detector conservador (unidad) =====
-    assert.strictEqual(detectarBusquedaNoMi('busca precio del dolar en Bolivia'), 'precio del dolar en Bolivia', 'comando busca');
-    assert.strictEqual(detectarBusquedaNoMi('Buscar: historia de Tiwanaku'), 'historia de Tiwanaku', 'comando con dos puntos');
-    assert.strictEqual(detectarBusquedaNoMi('investiga las causas de la revolucion'), 'las causas de la revolucion', 'comando investiga');
-    assert.strictEqual(detectarBusquedaNoMi('noticias de Santa Cruz hoy'), 'noticias de Santa Cruz hoy', 'auto: noticias + lugar');
-    assert.strictEqual(detectarBusquedaNoMi('ultimas noticias'), 'ultimas noticias', 'auto: ultimas noticias');
-    assert.strictEqual(detectarBusquedaNoMi('quien gano el partido ayer'), 'quien gano el partido ayer', 'auto: ganador + recencia');
-    // OBLIGATORIO: intención informativa + recencia con palabras intermedias.
-    assert.strictEqual(detectarBusquedaNoMi('dime las noticias destacadas de Bolivia hoy'), 'dime las noticias destacadas de Bolivia hoy', 'auto OBLIGATORIO: noticias destacadas + hoy (palabras intermedias)');
-    assert.strictEqual(detectarBusquedaNoMi('necesito saber las novedades del mercado esta semana por favor'), 'necesito saber las novedades del mercado esta semana por favor', 'auto: novedades + esta semana con intermedias');
-    assert.strictEqual(detectarBusquedaNoMi('hay titulares sobre el partido recientemente'), 'hay titulares sobre el partido recientemente', 'auto: titulares + recientemente');
-    assert.strictEqual(detectarBusquedaNoMi('que precio tiene el dolar de hoy'), 'que precio tiene el dolar de hoy', 'auto: precio + hoy');
-    assert.strictEqual(detectarBusquedaNoMi('cuales fueron los resultados de los examenes esta semana'), 'cuales fueron los resultados de los examenes esta semana', 'auto: resultados + esta semana');
-    assert.strictEqual(detectarBusquedaNoMi('la cotizacion del euro actual por favor'), 'la cotizacion del euro actual por favor', 'auto: cotizacion + actual');
-    // Falsos positivos obligatorios (palabras genéricas aisladas NO activan).
-    assert.strictEqual(detectarBusquedaNoMi('me gustan las noticias antiguas'), null, 'FP: noticias suelta');
-    assert.strictEqual(detectarBusquedaNoMi('historia de Bolivia'), null, 'FP OBLIGATORIO: historia sin recencia ni intención informativa');
-    assert.strictEqual(detectarBusquedaNoMi('me interesa la historia, no las noticias'), null, 'FP: noticias sin recencia (opinión/histórico)');
-    assert.strictEqual(detectarBusquedaNoMi('el precio del dolar fue estable'), null, 'FP: precio sin recencia');
-    assert.strictEqual(detectarBusquedaNoMi('el precio de la casa era alto'), null, 'FP: precio suelto');
-    assert.strictEqual(detectarBusquedaNoMi('cuentame un chiste'), null, 'FP: sin intención');
-    assert.strictEqual(detectarBusquedaNoMi('que tiempo hara manana'), null, 'FP: eso es clima, no búsqueda');
-    assert.strictEqual(detectarBusquedaNoMi('busca'), null, 'FP: comando sin consulta');
-    assert.strictEqual(detectarBusquedaNoMi(''), null, 'vacío -> null');
+    function conUso(handler) {
+        responder = async (url, opts) => {
+            if (url.includes('/v1/usage')) return { periodo: '2026-09', tokens_usados: 10, cuota_mensual_invitado: 420000 };
+            return await handler(url, opts);
+        };
+    }
 
-    // ===== 2) Clima tiene prioridad sobre búsqueda general =====
-    assert.strictEqual(detectarClimaNoMi('busca el clima en La Paz'), 'La Paz', 'clima detectado aunque haya comando');
+    function ocurrencias(texto, fragmento) {
+        return String(texto).split(fragmento).length - 1;
+    }
 
-    // ===== 2b) Integración: el clima gana a la auto-detección aunque haya
-    //          "busca" y "noticias" con palabras intermedias =====
+    // 1) No hay heurística léxica; cualquier turno habilita decisión semántica.
+    assert.strictEqual(typeof detectarBusquedaNoMi, 'undefined', 'sin detector por palabras en el cliente');
     activarNoMi();
-    let cuerpoPri = null;
-    responder = async (url, opts) => {
-        if (url.includes('/v1/chat')) { cuerpoPri = JSON.parse(opts.body); return { ok: true, respuesta: 'Clima en La Paz: 18°C.', climaEstado: 'ok' }; }
-        if (url.includes('/v1/usage')) return { periodo: '2026-08' };
-        throw new Error('inesperado en test 2b búsqueda: ' + url);
-    };
-    botMsgs = [];
-    await preguntar('busca las noticias del clima en La Paz hoy');
-    assert.ok(cuerpoPri && cuerpoPri.herramienta && cuerpoPri.herramienta.tipo === 'clima', 'clima mantiene prioridad sobre búsqueda (aunque haya "busca"/"noticias")');
-    assert.strictEqual(cuerpoPri.herramienta.ubicacion, 'La Paz', 'ubicación limpia usada para clima: ' + cuerpoPri.herramienta.ubicacion);
-
-    // ===== 3) Comando busca → ruta búsqueda NoMi (sin credenciales personales) =====
-    activarNoMi();
-    let cuerpoBusq = null;
-    responder = async (url, opts) => {
-        if (url.includes('/v1/chat')) {
-            cuerpoBusq = JSON.parse(opts.body);
-            return { ok: true, busquedaEstado: 'ok', resultados: [
-                { titulo: 'Fuente Confiable', url: 'https://ejemplo.com/a', contenido: 'Dato útil uno.' },
-                { titulo: 'Otra Fuente', url: 'https://ejemplo.com/b', contenido: 'Dato útil dos.' },
-            ] };
-        }
-        throw new Error('inesperado en test 3: ' + url);
-    };
-    botMsgs = [];
-    const contAntes = NoMiState.contadorPreguntas;
-    await preguntar('busca datos de Tiwanaku');
-    assert.ok(cuerpoBusq && cuerpoBusq.herramienta && cuerpoBusq.herramienta.tipo === 'busqueda', 'envía herramienta busqueda al Worker');
-    assert.strictEqual(cuerpoBusq.herramienta.consulta, 'datos de Tiwanaku', 'consulta extraída del comando');
-    const cuerpoSerializado = JSON.stringify(cuerpoBusq);
-    assert.ok(!cuerpoSerializado.includes('tvly-') && !cuerpoSerializado.includes('tavilyKeyActual'), 'NO expone clave Tavily del usuario');
-    assert.ok(!cuerpoSerializado.includes('sk-or'), 'sin claves de API Personal');
-    assert.strictEqual(NoMiState.contadorPreguntas, contAntes + 1, 'cuenta la pregunta atendida');
-    const enlaces = document.querySelectorAll('a').filter((a) => a.href && a.href.indexOf('https://ejemplo.com') === 0);
-    assert.ok(enlaces.length >= 2, 'renderiza enlaces de fuentes: ' + enlaces.length);
-    enlaces.forEach((a) => {
-        assert.strictEqual(a.target, '_blank', 'target=_blank');
-        assert.strictEqual(a.rel, 'noopener noreferrer', 'rel=noopener noreferrer');
-        assert.ok(/^https?:\\/\\//.test(a.href), 'enlace solo http/https');
+    let cuerpoNormal = null;
+    conUso(async (url, opts) => {
+        assert.ok(url.includes('/v1/chat'));
+        cuerpoNormal = JSON.parse(opts.body);
+        return { ok: true, respuesta: 'Respuesta conversacional normal.', busquedaProtocolo: 1 };
     });
-    const ultimoHist = NoMiState.historial[NoMiState.historial.length - 1];
-    assert.ok(ultimoHist.role === 'assistant' && ultimoHist.content.includes('https://ejemplo.com/a'), 'historial conserva fuentes en texto plano');
+    await preguntar('¿Sigue disponible el nuevo subsidio municipal?');
+    assert.strictEqual(cuerpoNormal.permitirBusqueda, true, 'decisión semántica sin palabra obligatoria');
+    assert.ok(!cuerpoNormal.herramienta, 'el cliente no construye una búsqueda');
+    assert.ok(new TextEncoder().encode(cuerpoNormal.mensaje).length <= 5000, 'contrato semántico cabe con schema bajo 8000 TPM');
+    assert.strictEqual(ocurrencias(cuerpoNormal.mensaje, '¿Sigue disponible el nuevo subsidio municipal?'), 1, 'pregunta actual exactamente una vez');
+    const mensajeSemanticoLargo = construirMensajeWorkerNoMi('Pregunta del usuario: ' + 'á'.repeat(4000), 5000);
+    assert.ok(new TextEncoder().encode(mensajeSemanticoLargo).length <= 5000, 'recorte UTF-8 respeta el máximo semántico real');
 
-    // ===== 3c) OBLIGATORIO: auto-detección con palabras intermedias dispara Tavily NoMi =====
+    // 2) Historial cronológico: un seguimiento conserva tema, lugar y respuesta.
     activarNoMi();
-    let cuerpoObl = null;
-    responder = async (url, opts) => {
-        if (url.includes('/v1/chat')) { cuerpoObl = JSON.parse(opts.body); return { ok: true, busquedaEstado: 'ok', resultados: [{ titulo: 'Bolivia', url: 'https://ejemplo.com/bolivia-hoy', contenido: 'Noticias de hoy.' }] }; }
-        throw new Error('inesperado en test 3c: ' + url);
-    };
-    botMsgs = [];
-    await preguntar('dime las noticias destacadas de Bolivia hoy');
-    assert.ok(cuerpoObl && cuerpoObl.herramienta && cuerpoObl.herramienta.tipo === 'busqueda', 'OBLIGATORIO: envía herramienta de búsqueda al Worker');
-    assert.strictEqual(cuerpoObl.herramienta.consulta, 'dime las noticias destacadas de Bolivia hoy', 'OBLIGATORIO: consulta completa (sin !search ni "Busca:")');
-    const enlacesObl = document.querySelectorAll('a');
-    assert.ok(enlacesObl.some((a) => a.href === 'https://ejemplo.com/bolivia-hoy'), 'OBLIGATORIO: renderiza fuentes de Tavily');
+    const cuerpos = [];
+    let turno = 0;
+    conUso(async (url, opts) => {
+        const cuerpo = JSON.parse(opts.body);
+        cuerpos.push(cuerpo);
+        turno++;
+        if (turno === 1) return {
+            ok: true,
+            respuesta: 'La economía cruceña registró dos novedades relevantes [1].',
+            busquedaEstado: 'ok',
+            busquedaProtocolo: 1,
+            fuentes: [
+                { titulo: 'Economía de Santa Cruz', url: 'https://ejemplo.com/economia?utm=x#top', fecha: '2026-09-04' },
+                { titulo: 'URL insegura', url: 'javascript:alert(1)', fecha: '' },
+            ],
+        };
+        return {
+            ok: true,
+            respuesta: 'Sí: estas son las novedades actuales de ese mismo tema [1].',
+            busquedaEstado: 'ok',
+            busquedaProtocolo: 1,
+            fuentes: [{ titulo: 'Actualización económica', url: 'https://ejemplo.com/actual', fecha: '2026-09-04' }],
+        };
+    });
+    await preguntar('Cuéntame qué está ocurriendo con la economía en Santa Cruz');
+    await preguntar('esas noticias tienen que ser actuales');
+    assert.strictEqual(cuerpos.length, 2, 'una petición cliente por turno');
+    assert.ok(cuerpos.every(c => c.permitirBusqueda === true && !c.herramienta));
+    const seguimiento = cuerpos[1].mensaje;
+    const iTema = seguimiento.indexOf('Cuéntame qué está ocurriendo con la economía en Santa Cruz');
+    const iRespuesta = seguimiento.indexOf('La economía cruceña registró dos novedades');
+    const iActual = seguimiento.lastIndexOf('esas noticias tienen que ser actuales');
+    assert.ok(iTema >= 0 && iRespuesta > iTema && iActual > iRespuesta, 'historial cronológico antes del seguimiento');
+    assert.strictEqual(ocurrencias(seguimiento, 'esas noticias tienen que ser actuales'), 1, 'seguimiento actual no duplicado');
+    assert.strictEqual(ocurrencias(seguimiento, 'Historial reciente:'), 1, 'cabecera única del historial');
+    assert.ok(!JSON.stringify(cuerpos).includes('tvly-') && !JSON.stringify(cuerpos).includes('sk-or'), 'sin claves personales en NoMi');
 
-    // ===== 3b) P2-5: cliente re-valida URLs con new URL (sin query/hash) =====
-    activarNoMi();
-    responder = async () => ({ ok: true, busquedaEstado: 'ok', resultados: [
-        { titulo: 'Con query', url: 'https://limpia.test/p?utm_source=x#seccion', contenido: 'contenido' },
-        { titulo: 'Maliciosa', url: 'javascript:alert(1)', contenido: 'contenido' },
-    ] });
-    botMsgs = [];
-    await preguntar('busca verificacion urls');
-    const enlaces3b = document.querySelectorAll('a');
-    assert.strictEqual(enlaces3b.filter((a) => a.href === 'https://limpia.test/p').length, 1, 'URL normalizada sin query/hash');
-    assert.ok(!enlaces3b.some((a) => String(a.href).indexOf('javascript:') === 0), 'sin enlaces javascript:');
+    const enlaces = document.querySelectorAll('a');
+    assert.ok(enlaces.some(a => a.href === 'https://ejemplo.com/economia'), 'fuente normalizada sin query/hash');
+    assert.ok(enlaces.some(a => a.href === 'https://ejemplo.com/actual'), 'fuente del seguimiento visible');
+    assert.ok(!enlaces.some(a => String(a.href).startsWith('javascript:')), 'URL insegura descartada');
+    enlaces.filter(a => a.href.indexOf('ejemplo.com') >= 0).forEach((a) => {
+        assert.strictEqual(a.target, '_blank');
+        assert.strictEqual(a.rel, 'noopener noreferrer');
+    });
+    const histFinal = NoMiState.historial[NoMiState.historial.length - 1];
+    assert.ok(histFinal.content.includes('https://ejemplo.com/actual'), 'historial conserva respuesta y fuente');
+    assert.ok(!histFinal.content.includes('contenido Tavily'), 'sin volcado de evidencia Tavily');
 
-    // ===== 4) P1-1: NoMi con búsqueda desactivada NUNCA cae al flujo legado =====
-    // motorBusqueda=tavily + clave local realista: buscarWeb debe ser 0 y el
-    // chat normal del Worker 1, para comando, auto-detección y busquedaForzada.
+    // 3) Preferencia OFF: chat NoMi normal, sin herramienta ni Tavily local.
     activarNoMi();
-    NoMiState.motorBusqueda = 'tavily';
-    NoMiState.tavilyKeyActual = 'tvly-user-key-abc123';
     setBusquedaWebNomi(false);
-    let llamadasBuscarWebLegado = 0, llamadasChatNormal = 0, cuerpoLegado = null;
-    const _buscarWebLegado = buscarWeb;
-    buscarWeb = async () => { llamadasBuscarWebLegado++; return { results: [] }; };
-    responder = async (url, opts) => {
-        if (url.includes('/v1/chat')) { llamadasChatNormal++; cuerpoLegado = JSON.parse(opts.body); return { ok: true, respuesta: 'respuesta normal NoMi' }; }
-        if (url.includes('api.tavily.com')) { llamadasBuscarWebLegado++; return { results: [] }; }
-        throw new Error('inesperado en test 4: ' + url);
-    };
-    botMsgs = [];
-    await preguntar('busca datos de Tiwanaku');
-    assert.strictEqual(llamadasBuscarWebLegado, 0, 'P1-1 comando: buscarWeb/Tavily local = 0');
-    assert.strictEqual(llamadasChatNormal, 1, 'P1-1 comando: chat Worker normal = 1');
-    assert.ok(cuerpoLegado && !cuerpoLegado.herramienta, 'P1-1 comando: sin herramienta');
-    botMsgs = []; llamadasChatNormal = 0; cuerpoLegado = null;
-    await preguntar('noticias de Santa Cruz hoy');
-    assert.strictEqual(llamadasBuscarWebLegado, 0, 'P1-1 auto-detección: buscarWeb = 0');
-    assert.strictEqual(llamadasChatNormal, 1, 'P1-1 auto-detección: chat normal = 1');
+    NoMiState.tavilyKeyActual = 'tvly-user-key-que-no-debe-salir';
+    let cuerpoOff = null;
+    let llamadasLegado = 0;
+    const _buscarWeb = buscarWeb;
+    buscarWeb = async () => { llamadasLegado++; return { results: [] }; };
+    conUso(async (url, opts) => {
+        cuerpoOff = JSON.parse(opts.body);
+        return { ok: true, respuesta: 'Respuesta sin búsqueda.' };
+    });
+    await preguntar('Dime qué cambió recientemente en Bolivia');
+    assert.strictEqual(cuerpoOff.permitirBusqueda, false, 'preferencia OFF explícita');
+    assert.ok(!cuerpoOff.herramienta);
+    assert.strictEqual(llamadasLegado, 0, 'NoMi no usa búsqueda Personal local');
+    assert.ok(!JSON.stringify(cuerpoOff).includes('tvly-user-key'));
+    buscarWeb = _buscarWeb;
+
+    // 3b) La lupa fuerza búsqueda en NoMi incluso con preferencia OFF, siempre
+    // vía Worker y sin tocar Tavily Personal.
+    activarNoMi();
+    setBusquedaWebNomi(false);
     NoMiState.busquedaForzada = true;
-    botMsgs = []; llamadasChatNormal = 0; cuerpoLegado = null;
-    await preguntar('dime lo que sea');
-    assert.strictEqual(llamadasBuscarWebLegado, 0, 'P1-1 busquedaForzada: buscarWeb = 0');
-    assert.strictEqual(llamadasChatNormal, 1, 'P1-1 busquedaForzada: chat normal = 1');
-    assert.strictEqual(NoMiState.busquedaForzada, false, 'busquedaForzada se consume (no se fuga a Personal)');
-    buscarWeb = _buscarWebLegado;
-    setBusquedaWebNomi(true);
+    let cuerpoForzado = null;
+    conUso(async (url, opts) => {
+        cuerpoForzado = JSON.parse(opts.body);
+        return {
+            ok: true,
+            respuesta: 'Resultado web verificado [1].',
+            busquedaEstado: 'ok',
+            busquedaProtocolo: 1,
+            fuentes: [{ titulo: 'Fuente', url: 'https://fuente.example/noticia' }],
+        };
+    });
+    await preguntar('Comprueba este dato');
+    assert.strictEqual(cuerpoForzado.permitirBusqueda, true, 'forzar habilita la herramienta');
+    assert.strictEqual(cuerpoForzado.forzarBusqueda, true, 'el Worker recibe la orden explícita');
+    assert.strictEqual(NoMiState.busquedaForzada, false, 'la orden se consume una sola vez');
 
-    // ===== 5) Clima prioritario aunque empiece con comando de búsqueda =====
+    // 3c) Bundle nuevo + Worker antiguo: no presenta una respuesta sin protocolo
+    // como si fuera información actual verificada.
     activarNoMi();
-    let cuerpoClimaPrio = null;
-    responder = async (url, opts) => {
-        if (url.includes('/v1/chat')) { cuerpoClimaPrio = JSON.parse(opts.body); return { ok: true, respuesta: 'Clima en La Paz: 12°C.', climaEstado: 'ok' }; }
-        throw new Error('inesperado en test 5: ' + url);
-    };
     botMsgs = [];
-    await preguntar('busca el clima en La Paz');
-    assert.ok(cuerpoClimaPrio && cuerpoClimaPrio.herramienta && cuerpoClimaPrio.herramienta.tipo === 'clima', 'clima gana a búsqueda general');
+    const contadorAntesWorkerViejo = NoMiState.contadorPreguntas;
+    conUso(async () => ({ ok: true, respuesta: 'Dato actual no verificable del Worker viejo.' }));
+    await preguntar('¿Qué cambió hoy en el municipio?');
+    assert.ok(botMsgs.some(m => m.includes('necesita actualizar el servidor')), 'degradación explícita por versión');
+    assert.ok(!botMsgs.some(m => m.includes('Dato actual no verificable')), 'no muestra el dato no verificable');
+    assert.strictEqual(NoMiState.reintentarPregunta, '', 'actualizar Worker no es un fallo reintentable');
+    assert.strictEqual(NoMiState.contadorPreguntas, contadorAntesWorkerViejo, 'una respuesta no verificable no cuenta como atendida');
 
-    // ===== 6) Worker antiguo (400) → mensaje claro, sin crash ni fallback =====
+    // 4) El clima conserva prioridad y su ruta especializada sin tool loop web.
     activarNoMi();
-    responder = async () => {
-        const e = new Error('Error 400: parametros-invalidos');
-        e.status = 400;
-        throw e;
-    };
-    botMsgs = [];
-    await preguntar('busca novedades del servidor');
-    assert.ok(botMsgs.some((m) => m.includes('actualización del servidor')), 'mensaje claro de actualización requerida');
-    assert.strictEqual(NoMiState.reintentarPregunta, '', 'no ofrece reintento contra Worker antiguo');
+    NoMiState.busquedaForzada = true;
+    let cuerpoClima = null;
+    conUso(async (url, opts) => {
+        cuerpoClima = JSON.parse(opts.body);
+        return { ok: true, respuesta: 'Clima en La Paz: 18 °C.', climaEstado: 'ok' };
+    });
+    await preguntar('busca el clima en La Paz hoy');
+    assert.strictEqual(cuerpoClima.herramienta.tipo, 'clima');
+    assert.strictEqual(cuerpoClima.herramienta.ubicacion, 'La Paz');
+    assert.strictEqual(cuerpoClima.permitirBusqueda, undefined);
+    assert.strictEqual(NoMiState.busquedaForzada, false, 'la lupa no se filtra a la pregunta posterior si clima gana');
 
-    // ===== 6b) P1-2: 400 distinguido por código estable del cuerpo JSON =====
+    // 5) Fallo Tavily es reintentable; estados definitivos no lo son.
     activarNoMi();
-    // a) Pre-validación local: consulta inválida NUNCA viaja al Worker.
-    let llamadasRed6b = 0;
-    responder = async () => { llamadasRed6b++; throw new Error('no debe llamarse'); };
+    setBusquedaWebNomi(false);
+    NoMiState.busquedaForzada = true;
+    responder = async () => ({ ok: true, respuesta: 'No se pudo consultar la web ahora. Reintenta.', busquedaEstado: 'fallo_proveedor', busquedaProtocolo: 1 });
     botMsgs = [];
-    const res6b = await llamarBusquedaNoMi('x');
-    assert.strictEqual(res6b.estado, 'consulta_invalida', 'pre-validación local: consulta inválida');
-    assert.ok(res6b.texto.includes('no es válida'), 'mensaje humano de validación');
-    assert.strictEqual(llamadasRed6b, 0, 'consulta inválida: sin red');
-    // b) 400 del Worker ACTUAL (consulta-busqueda-invalida): validación, no actualización.
-    responder = async () => {
-        const e = new Error('Error 400: {"error":"consulta-busqueda-invalida","mensaje":"Indica qué buscar"}');
-        e.status = 400;
-        throw e;
-    };
-    botMsgs = [];
-    await preguntar('busca yy');
-    assert.ok(botMsgs.some((m) => m.includes('no es válida')), '400 consulta-busqueda-invalida: mensaje de validación');
-    assert.ok(!botMsgs.some((m) => m.includes('actualización')), 'sin falso aviso de actualización');
-    assert.strictEqual(NoMiState.reintentarPregunta, '', '400 validación: sin reintento');
-    // c) 400 del Worker ANTIGUO (parametros-invalidos): actualización requerida.
-    responder = async () => {
-        const e = new Error('Error 400: {"error":"parametros-invalidos","mensaje":"Herramienta no soportada."}');
-        e.status = 400;
-        throw e;
-    };
-    botMsgs = [];
-    await preguntar('busca zz');
-    assert.ok(botMsgs.some((m) => m.includes('actualización del servidor')), '400 antiguo: aviso de actualización');
+    const antesFallo = NoMiState.contadorPreguntas;
+    await preguntar('¿Qué ocurrió con esa medida?');
+    assert.ok(botMsgs.some(m => m.includes('No se pudo consultar la web')));
+    assert.strictEqual(NoMiState.reintentarPregunta, '¿Qué ocurrió con esa medida?');
+    assert.strictEqual(NoMiState.estadoHud, 'sin_conexion');
+    assert.strictEqual(NoMiState.contadorPreguntas, antesFallo);
+    assert.strictEqual(NoMiState.reintentarBusquedaForzada, true, 'Tavily falló: el reintento no vuelve a decidir');
+    let cuerpoReintento = null;
+    conUso(async (url, opts) => {
+        cuerpoReintento = JSON.parse(opts.body);
+        return { ok: true, respuesta: 'Reintento completado.', busquedaProtocolo: 1 };
+    });
+    actualizarBotonAccionHud();
+    await document.getElementById('nomi-hud-accion').onclick();
+    assert.strictEqual(cuerpoReintento.forzarBusqueda, true, 'el HUD reintenta obligando la búsqueda');
+    assert.strictEqual(NoMiState.reintentarPregunta, '', 'éxito limpia reintento');
 
-    // ===== 7) fallo_proveedor: mensaje humano, HUD y Reintentar (reintento único) =====
     activarNoMi();
-    responder = async () => ({ ok: true, respuesta: 'No se pudo realizar la búsqueda ahora. Reintenta.', busquedaEstado: 'fallo_proveedor' });
+    responder = async () => ({
+        ok: true,
+        respuesta: 'Encontré fuentes, pero no pude preparar la respuesta. Reintenta.',
+        busquedaEstado: 'fallo_sintesis',
+        busquedaProtocolo: 1,
+    });
     botMsgs = [];
-    const contProv = NoMiState.contadorPreguntas;
-    await preguntar('busca resultados de la eleccion');
-    assert.ok(botMsgs.some((m) => m.includes('No se pudo realizar la búsqueda')), 'conserva el mensaje humano del Worker');
-    assert.strictEqual(NoMiState.reintentarPregunta, 'busca resultados de la eleccion', 'guarda la pregunta para Reintentar');
-    assert.strictEqual(NoMiState.estadoHud, 'sin_conexion', 'HUD sin_conexion en fallo_proveedor');
-    assert.strictEqual(NoMiState.contadorPreguntas, contProv, 'no cuenta pregunta fallida');
-    // Reintento único exitoso (botón Reintentar reenvía la misma pregunta).
-    responder = async () => ({ ok: true, busquedaEstado: 'ok', resultados: [{ titulo: 'OK', url: 'https://ok.test/x', contenido: 'bien' }] });
-    botMsgs = [];
-    await preguntar(NoMiState.reintentarPregunta);
-    assert.strictEqual(NoMiState.reintentarPregunta, '', 'el éxito limpia reintentarPregunta');
+    const antesSintesis = NoMiState.contadorPreguntas;
+    await preguntar('continúa con las noticias anteriores');
+    assert.ok(botMsgs.some(m => m.includes('no pude preparar la respuesta')));
+    assert.strictEqual(NoMiState.reintentarBusquedaForzada, true, 'fallo de síntesis reintenta sin perder la búsqueda');
+    assert.strictEqual(NoMiState.contadorPreguntas, antesSintesis, 'fallo de síntesis no cuenta como respuesta atendida');
 
-    // ===== 8) Red caída: mismo tratamiento blando que clima =====
+    for (const caso of [
+        { estado: 'limite_diario', texto: 'Has superado el límite de búsquedas web por hoy (20).' },
+        { estado: 'sin_resultados', texto: 'No encontré fuentes útiles para responder.' },
+        { estado: 'consulta_invalida', texto: 'No pude preparar una búsqueda web segura.' },
+    ]) {
+        activarNoMi();
+        const contadorAntesEstado = NoMiState.contadorPreguntas;
+        conUso(async () => ({ ok: true, respuesta: caso.texto, busquedaEstado: caso.estado, busquedaProtocolo: 1 }));
+        botMsgs = [];
+        await preguntar('consulta de control');
+        assert.ok(botMsgs.some(m => m.includes(caso.texto)));
+        assert.strictEqual(NoMiState.reintentarPregunta, '', caso.estado + ': sin reintento');
+        const debeContar = caso.estado === 'limite_diario' || caso.estado === 'sin_resultados';
+        assert.strictEqual(NoMiState.contadorPreguntas, contadorAntesEstado + (debeContar ? 1 : 0), caso.estado + ': contador coherente');
+    }
+
+    // 6) Un fallo de red conserva el manejo general del HUD NoMi.
     activarNoMi();
     responder = async () => { throw new Error('red caída'); };
     botMsgs = [];
-    await preguntar('noticias de Cochabamba esta semana');
-    assert.ok(botMsgs.some((m) => m.includes('Reintentar')), 'mensaje humano de conexión');
-    assert.strictEqual(NoMiState.estadoHud, 'sin_conexion', 'HUD refleja red caída');
+    await preguntar('continúa con el tema');
+    assert.ok(botMsgs.some(m => m.includes('Reintentar')));
+    assert.strictEqual(NoMiState.estadoHud, 'sin_conexion');
 
-    // ===== 9) Personal/OpenRouter intacto: su Tavily local y su flujo no cambian =====
+    // 7) Personal/OpenRouter queda intacto y conserva su Tavily local.
     setModoAcceso(MODO_ACCESO_OPENROUTER);
     NoMiState.modoAcceso = MODO_ACCESO_OPENROUTER;
     NoMiState.apiKeyActual = 'sk-or-test';
@@ -350,38 +344,27 @@ const pruebas = `
     NoMiState.tavilyKeyActual = 'tvly-user-key';
     NoMiState.motorBusqueda = 'tavily';
     NoMiState.busquedaWebActiva = false;
-    NoMiState.historial = []; NoMiState.isWaiting = false; NoMiState.reintentarPregunta = '';
-    let llamadasBuscarWeb = 0, llamadasPersonal = 0, llamadasLlamarBusq = 0;
-    const _buscarWeb = buscarWeb;
+    NoMiState.historial = [];
+    NoMiState.isWaiting = false;
+    NoMiState.reintentarPregunta = '';
+    let llamadasBuscarWeb = 0;
+    let llamadasPersonal = 0;
+    let llamadasWorker = 0;
+    const _buscarWebPersonal = buscarWeb;
     buscarWeb = async () => { llamadasBuscarWeb++; return { results: [{ title: 'T', content: 'C', url: 'https://personal.example/x' }] }; };
-    const _llamarBusq = llamarBusquedaNoMi;
-    llamarBusquedaNoMi = async (c) => { llamadasLlamarBusq++; return _llamarBusq(c); };
     responder = async (url) => {
         if (url.includes('/chat/completions')) { llamadasPersonal++; return { choices: [{ message: { content: 'resp personal' } }] }; }
-        throw new Error('Personal no debe llamar al Worker: ' + url);
+        if (url.includes('/v1/chat')) { llamadasWorker++; throw new Error('NoMi Worker no debe intervenir'); }
+        throw new Error('URL Personal inesperada: ' + url);
     };
     await preguntar('busca datos de tiwanaku');
-    assert.strictEqual(llamadasBuscarWeb, 1, 'Personal usa SU Tavily local (clave tvly-user-key)');
-    assert.strictEqual(llamadasPersonal, 1, 'Personal resume con SU API');
-    assert.strictEqual(llamadasLlamarBusq, 0, 'la ruta búsqueda NoMi NO interviene en Personal');
-    buscarWeb = _buscarWeb;
-    llamarBusquedaNoMi = _llamarBusq;
-
-    // ===== 10) límite_diario y sin_resultados pintan su mensaje sin reintento =====
-    activarNoMi();
-    responder = async () => ({ ok: true, respuesta: 'Has superado el límite de búsquedas web por hoy (20). Inténtalo mañana.', busquedaEstado: 'limite_diario' });
-    botMsgs = [];
-    await preguntar('busca algo mas');
-    assert.ok(botMsgs.some((m) => m.includes('límite de búsquedas')), 'limite_diario informado');
-    assert.strictEqual(NoMiState.reintentarPregunta, '', 'limite_diario no ofrece reintento');
-    responder = async () => ({ ok: true, respuesta: 'No encontré resultados útiles para esa búsqueda. Prueba con otros términos.', busquedaEstado: 'sin_resultados' });
-    botMsgs = [];
-    await preguntar('busca otra cosa rara xyz');
-    assert.ok(botMsgs.some((m) => m.includes('No encontré resultados')), 'sin_resultados informado');
-    assert.strictEqual(NoMiState.reintentarPregunta, '', 'sin_resultados no ofrece reintento');
+    assert.strictEqual(llamadasBuscarWeb, 1, 'Personal usa Tavily local');
+    assert.strictEqual(llamadasPersonal, 1, 'Personal sintetiza con su API');
+    assert.strictEqual(llamadasWorker, 0, 'sin Worker NoMi en Personal');
+    buscarWeb = _buscarWebPersonal;
 
     agregarMensaje = _agregar;
-    console.log('OK: todas las pruebas de búsqueda web NoMi (cliente) pasaron');
+    console.log('OK: todas las pruebas de búsqueda web semántica NoMi (cliente) pasaron');
 })().catch((e) => { console.error('FALLO:', e && e.message); throw e; });
 `;
 
@@ -392,13 +375,15 @@ hacerPeticion = async (url, opts) => { return await responder(url, opts); };
 
 vm.runInContext(combinado, ctx, { filename: 'nomi-busqueda-test.js' });
 
-// ===== Auditoría de cabecera del bundle (P2-6) =====
+// Auditoría estática del bundle distribuible.
 const bundle = fs.readFileSync(path.join(ROOT, 'NoMi Asistente V5.8.user.js'), 'utf8');
-assert.ok(/@connect\s+api\.tavily\.com/.test(bundle), '@connect api.tavily.com presente (preserva búsqueda Personal directa en TM/VM)');
+assert.ok(/@connect\s+api\.tavily\.com/.test(bundle), '@connect Tavily preserva la búsqueda Personal');
 assert.ok(/@connect\s+nomi-api-worker\./.test(bundle), '@connect del Worker NoMi presente');
-assert.ok(!/TAVILY_API_KEY/.test(bundle), 'el bundle NUNCA contiene TAVILY_API_KEY');
-assert.ok(/su asistente virtual\./.test(bundle), 'bundle: saludo inicial femenino ("su asistente virtual")');
-assert.ok(/Estoy dise[ñn]ada/.test(bundle), 'bundle: saludo inicial con "estoy diseñada"');
-assert.ok(!/asistente de navegaci[óo]n/.test(bundle), 'bundle: sin saludo antiguo');
-assert.ok(/una asistente virtual/.test(bundle), 'bundle: NOMI_PERSONA_SISTEMA femenina ("una asistente virtual")');
-console.log('OK: cabecera del bundle verificada (@connect api.tavily.com, sin secretos, identidad femenina)');
+assert.ok(!/TAVILY_API_KEY/.test(bundle), 'el bundle nunca contiene TAVILY_API_KEY');
+assert.ok(!/function detectarBusquedaNoMi/.test(bundle), 'bundle sin detector léxico NoMi');
+assert.ok(/permitirBusqueda/.test(bundle), 'bundle incluye el contrato semántico');
+assert.ok(/forzarBusqueda/.test(bundle), 'bundle conserva la lupa como búsqueda obligatoria vía Worker');
+assert.ok(/busquedaProtocolo/.test(bundle), 'bundle detecta versiones antiguas del Worker');
+assert.ok(/su asistente virtual\./.test(bundle), 'saludo inicial femenino');
+assert.ok(/Estoy dise[ñn]ada/.test(bundle), 'identidad femenina preservada');
+console.log('OK: cabecera y bundle verificados (sin secretos, identidad femenina, búsqueda semántica)');

@@ -80,7 +80,7 @@ test('busqueda NoMi devuelve hasta 3 resultados saneados sin Groq', async () => 
     data.resultados.forEach((res) => {
         assert.ok(/^https:\/\//.test(res.url), 'solo http/https');
         assert.ok(res.titulo && res.contenido, 'título y snippet presentes');
-        assert.ok(res.titulo.length <= 70 && res.contenido.length <= 110, 'título ≤70 y snippet ≤110 (respuesta breve)');
+        assert.ok(res.titulo.length <= 70 && res.contenido.length <= 110, 'ruta heredada conserva título ≤70 y snippet ≤110');
     });
     // La clave Tavily del Worker NUNCA aparece en la respuesta.
     assert.ok(!JSON.stringify(data).includes('tavily-test'), 'sin secreto en la respuesta');
@@ -101,6 +101,8 @@ test('URLs no http/https del proveedor se descartan', async () => {
         { title: 'Malicioso', url: 'javascript:alert(1)', content: 'x' },
         { title: 'FTP', url: 'ftp://ejemplo.com/archivo', content: 'x' },
         { title: 'Valido', url: 'https://ejemplo.com/ok?q=1&utm=x#top', content: 'Contenido válido.' },
+        { title: 'Duplicado', url: 'https://ejemplo.com/ok?otra=1', content: 'Contenido repetido.' },
+        { title: 'Sin evidencia', url: 'https://ejemplo.com/vacio', content: '   ' },
     ] });
     const r = await llamar(env, '/v1/chat', {
         metodo: 'POST', token,
@@ -108,7 +110,7 @@ test('URLs no http/https del proveedor se descartan', async () => {
     });
     const data = await r.json();
     assert.equal(data.busquedaEstado, 'ok');
-    assert.equal(data.resultados.length, 1, 'solo la URL http/https sobrevive');
+    assert.equal(data.resultados.length, 1, 'solo sobrevive una fuente segura, única y con evidencia');
     assert.equal(data.resultados[0].url, 'https://ejemplo.com/ok', 'sin query ni hash');
 });
 
@@ -123,7 +125,7 @@ test('sin resultados: mensaje humano y cupo consumido', async () => {
     assert.equal(r.status, 200);
     const data = await r.json();
     assert.equal(data.busquedaEstado, 'sin_resultados', 'señal explícita sin resultados');
-    assert.ok(/No encontré resultados/i.test(data.respuesta), 'mensaje humano');
+    assert.ok(/No encontré fuentes útiles/i.test(data.respuesta), 'mensaje humano');
     const usuario = await db.buscarPorToken(token);
     assert.equal(await db.contarConsultasBusqueda(usuario.id, diaActual()), 1, 'la petición llegó a Tavily: consume cupo');
 });
@@ -176,7 +178,7 @@ test('fallo Tavily (5xx/red/401/403/429) revierte cupo y permite reintento', asy
         assert.equal(r.status, 200, caso.etiqueta + ': sigue siendo 200');
         const data = await r.json();
         assert.equal(data.busquedaEstado, 'fallo_proveedor', caso.etiqueta + ': señal explícita de fallo temporal');
-        assert.ok(/No se pudo realizar la búsqueda/i.test(data.respuesta), caso.etiqueta + ': mensaje humano');
+        assert.ok(/No se pudo consultar la web/i.test(data.respuesta), caso.etiqueta + ': mensaje humano');
         const usuario = await db.buscarPorToken(token);
         assert.equal(await db.contarConsultasBusqueda(usuario.id, diaActual()), 0, caso.etiqueta + ': cupo revertido');
         // La consulta inmediatamente siguiente funciona con cupo completo.
@@ -227,7 +229,7 @@ test('privacidad: D1 no guarda consulta ni resultados', async () => {
     assert.ok(!JSON.stringify(estado.peticiones[0].cuerpo).includes('tavily-test'), 'clave fuera del cuerpo');
 });
 
-test('respuesta realmente breve: títulos y snippets acotados en conjunto', async () => {
+test('evidencia interna acotada para síntesis', async () => {
     const env = envNuevo();
     const { token } = await crearInvitado(env);
     const largo = 'Palabra '.repeat(60); // ~480 chars
@@ -240,11 +242,13 @@ test('respuesta realmente breve: títulos y snippets acotados en conjunto', asyn
     assert.equal(data.busquedaEstado, 'ok');
     let totalVisibles = 0;
     data.resultados.forEach((res) => {
-        assert.ok(res.titulo.length <= 70, 'título ≤ 70');
-        assert.ok(res.contenido.length <= 110, 'snippet ≤ 110');
+        assert.ok(res.titulo.length <= 70, 'título legado ≤ 70');
+        assert.ok(res.contenido.length <= 110, 'snippet legado ≤ 110');
+        assert.ok(new TextEncoder().encode(res.titulo).length <= 140, 'título legado UTF-8 acotado');
+        assert.ok(new TextEncoder().encode(res.contenido).length <= 220, 'snippet legado UTF-8 acotado');
         totalVisibles += res.titulo.length + res.contenido.length;
     });
-    assert.ok(totalVisibles <= 600, 'títulos+snippets ≤ 600 chars visibles en conjunto: ' + totalVisibles);
+    assert.ok(totalVisibles <= 540, 'salida heredada acotada a 540 chars: ' + totalVisibles);
 });
 
 test('timeout de Tavily (env TAVILY_TIMEOUT_MS) -> fallo_proveedor con rollback', async () => {
@@ -295,4 +299,261 @@ test('sin token -> 401; herramienta inválida -> 400; chat normal sigue vía Gro
     });
     assert.equal(rChat.status, 200);
     assert.ok((await rChat.json()).respuesta.includes('Hola'));
+});
+
+// Stub secuencial del flujo nuevo: Groq decide -> Tavily -> Groq sintetiza.
+// Registra cuerpos para comprobar contrato, límites y ausencia de fugas.
+function instalarFetchSemantico(config = {}) {
+    const estado = { groq: [], tavily: [] };
+    let indiceGroq = 0;
+    globalThis.fetch = async (url, opts = {}) => {
+        const u = String(url);
+        if (u.includes('groq.com')) {
+            const cuerpo = JSON.parse(opts.body || '{}');
+            estado.groq.push(cuerpo);
+            const definida = (config.groq || [])[indiceGroq++] || { texto: 'Respuesta normal.', total: 10 };
+            if (definida.status) return new Response('error Groq', { status: definida.status });
+            const message = definida.toolCalls
+                ? { content: definida.texto ?? null, tool_calls: definida.toolCalls }
+                : { content: definida.texto || '' };
+            return new Response(JSON.stringify({
+                choices: [{ message }],
+                usage: { total_tokens: definida.total || 10, prompt_tokens: 5, completion_tokens: Math.max(0, (definida.total || 10) - 5) },
+            }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        if (u.includes('api.tavily.com')) {
+            const cuerpo = JSON.parse(opts.body || '{}');
+            estado.tavily.push(cuerpo);
+            if (config.tavilyLanza) throw new Error('red Tavily');
+            if (config.tavilyStatus) return new Response('error', { status: config.tavilyStatus });
+            return new Response(JSON.stringify({ results: config.resultados || RESULTADOS_OK }), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+            });
+        }
+        throw new Error('URL inesperada en flujo semántico: ' + u);
+    };
+    return estado;
+}
+
+function toolBusqueda(argumentos, id = 'call_busqueda_1') {
+    return [{
+        id,
+        type: 'function',
+        function: { name: 'busqueda_web', arguments: JSON.stringify(argumentos) },
+    }];
+}
+
+test('decisión semántica: chat estable responde con una Groq y cero Tavily', async () => {
+    const env = envNuevo();
+    const { token, db } = await crearInvitado(env);
+    const estado = instalarFetchSemantico({ groq: [{ texto: 'La fotosíntesis convierte luz en energía química.', total: 13 }] });
+    const r = await llamar(env, '/v1/chat', {
+        metodo: 'POST', token,
+        body: { modelo: 'openai/gpt-oss-20b', mensaje: 'Explícame la fotosíntesis', permitirBusqueda: true },
+    });
+    assert.equal(r.status, 200);
+    const data = await r.json();
+    assert.match(data.respuesta, /fotosíntesis/i);
+    assert.equal(data.busquedaProtocolo, 1, 'señal estable incluso cuando no hizo falta buscar');
+    assert.equal(data.busquedaEstado, undefined, 'sin estado web cuando el modelo no busca');
+    assert.equal(estado.groq.length, 1, 'una sola llamada Groq');
+    assert.equal(estado.tavily.length, 0, 'cero Tavily');
+    assert.equal(estado.groq[0].tool_choice, 'auto');
+    assert.equal(estado.groq[0].parallel_tool_calls, false);
+    assert.equal(estado.groq[0].tools[0].function.name, 'busqueda_web');
+    assert.match(estado.groq[0].messages[0].content, /significado y el contexto/i, 'la decisión no depende de palabras clave');
+    assert.match(estado.groq[0].messages[0].content, /datos no confiables/i, 'historial y página no pueden inyectar instrucciones');
+    const usuario = await db.buscarPorToken(token);
+    assert.equal((await db.obtenerUso(usuario.id)).solicitudes, 1, 'una petición Groq contabilizada');
+});
+
+test('decisión semántica: Groq busca y sintetiza con tema, recencia y fuentes compactas', async () => {
+    const env = envNuevo();
+    const { token, db } = await crearInvitado(env);
+    const consulta = 'noticias económicas de Santa Cruz de la Sierra Bolivia hoy';
+    const estado = instalarFetchSemantico({
+        groq: [
+            { toolCalls: toolBusqueda({ consulta, tema: 'news', recencia: 'day' }), total: 30 },
+            { texto: 'La actividad económica regional tuvo dos novedades relevantes [1] [2].', total: 40 },
+        ],
+        resultados: [
+            { title: 'Economía cruceña', url: 'https://medio.bo/nota?utm_source=x#parte', content: 'Datos económicos recientes de Santa Cruz.', published_date: '2026-09-04' },
+            { title: 'Sector productivo', url: 'https://otro.bo/economia', content: 'El sector productivo informó novedades.', published_date: '2026-09-04' },
+        ],
+    });
+    const r = await llamar(env, '/v1/chat', {
+        metodo: 'POST', token,
+        body: {
+            modelo: 'openai/gpt-oss-120b',
+            mensaje: 'Historial reciente:\nUsuario: noticias económicas en Santa Cruz\nAsistente: ¿Qué aspecto?\n\nPregunta del usuario: tienen que ser actuales',
+            permitirBusqueda: true,
+        },
+    });
+    assert.equal(r.status, 200);
+    const data = await r.json();
+    assert.equal(data.busquedaEstado, 'ok');
+    assert.equal(data.busquedaProtocolo, 1);
+    assert.match(data.respuesta, /económica/i, 'entrega síntesis, no dump de Tavily');
+    assert.deepEqual(data.fuentes.map(f => f.url), ['https://medio.bo/nota', 'https://otro.bo/economia']);
+    assert.ok(data.fuentes.every(f => !Object.hasOwn(f, 'contenido')), 'el cliente no recibe snippets');
+    assert.equal(estado.groq.length, 2, 'dos llamadas Groq');
+    assert.equal(estado.tavily.length, 1, 'una llamada Tavily');
+    assert.equal(estado.tavily[0].query, consulta, 'consulta autosuficiente conserva tema y lugar');
+    assert.equal(estado.tavily[0].topic, 'news');
+    assert.equal(estado.tavily[0].time_range, 'day');
+    assert.ok(!estado.groq[1].tools, 'segunda llamada sin tools: no hay bucle infinito');
+    assert.equal(estado.groq[1].max_tokens, 320, 'síntesis acotada para evitar respuestas excesivas');
+    assert.match(estado.groq[1].messages[0].content, /máximo 160 palabras/i, 'la instrucción limita la extensión');
+    assert.match(estado.groq[1].messages[1].content, /Datos económicos recientes/, 'la síntesis recibe evidencia saneada');
+
+    const usuario = await db.buscarPorToken(token);
+    const uso = await db.obtenerUso(usuario.id);
+    assert.equal(uso.tokens, 70, 'suma usage real de ambas llamadas Groq');
+    assert.equal(uso.solicitudes, 2, 'contabiliza ambas peticiones Groq');
+    assert.equal(await db.contarConsultasBusqueda(usuario.id, diaActual()), 1, 'una búsqueda diaria');
+    const snap = await (await env.RATE_LIMITER.get('global').fetch('https://internal/snapshot', { method: 'GET' })).json();
+    assert.equal(snap.tokens_dia, 70, 'DO concilia la suma real de ambas llamadas');
+    assert.equal(snap.solicitudes_dia, 2, 'DO contabiliza ambas llamadas');
+    const persistido = JSON.stringify(env.NOMI_DB._tablas);
+    assert.ok(!persistido.includes(consulta), 'D1 no guarda consulta');
+    assert.ok(!persistido.includes('Datos económicos recientes'), 'D1 no guarda evidencia');
+});
+
+test('síntesis con texto Unicode permanece dentro del presupuesto Groq', async () => {
+    const env = envNuevo();
+    const { token } = await crearInvitado(env);
+    const consulta = '😀'.repeat(150); // 300 unidades JS, 600 bytes UTF-8
+    const estado = instalarFetchSemantico({
+        groq: [
+            { toolCalls: toolBusqueda({ consulta }), total: 15 },
+            { texto: 'Síntesis Unicode [1].', total: 16 },
+        ],
+        resultados: [0, 1, 2].map(i => ({
+            title: '😀'.repeat(45),
+            url: 'https://unicode.example/' + i,
+            content: '😀'.repeat(150),
+            published_date: '😀'.repeat(20),
+        })),
+    });
+    const r = await llamar(env, '/v1/chat', {
+        metodo: 'POST', token,
+        body: { modelo: 'openai/gpt-oss-20b', mensaje: '😀'.repeat(250), permitirBusqueda: true },
+    });
+    assert.equal(r.status, 200);
+    assert.equal((await r.json()).busquedaEstado, 'ok');
+    const promptSintesis = estado.groq[1].messages[1].content;
+    assert.ok(new TextEncoder().encode(promptSintesis).length <= 5000, 'evidencia Unicode no desborda la segunda llamada');
+});
+
+test('preferencia apagada no ofrece tools ni llama Tavily', async () => {
+    const env = envNuevo();
+    const { token } = await crearInvitado(env);
+    const estado = instalarFetchSemantico({ groq: [{ texto: 'Respuesta sin navegación.', total: 12 }] });
+    const r = await llamar(env, '/v1/chat', {
+        metodo: 'POST', token,
+        body: { modelo: 'openai/gpt-oss-20b', mensaje: '¿Qué pasó hoy?', permitirBusqueda: false },
+    });
+    assert.equal(r.status, 200);
+    assert.equal(estado.groq.length, 1);
+    assert.equal(estado.tavily.length, 0);
+    assert.equal(estado.groq[0].tools, undefined, 'no se ofrecen herramientas');
+    assert.equal(estado.groq[0].tool_choice, undefined);
+});
+
+test('búsqueda forzada obliga una herramienta sin depender de palabras ni preferencia', async () => {
+    const env = envNuevo();
+    const { token } = await crearInvitado(env);
+    const estado = instalarFetchSemantico({
+        groq: [
+            { toolCalls: toolBusqueda({ consulta: 'dato exacto a verificar' }), total: 11 },
+            { texto: 'Dato verificado con la fuente [1].', total: 12 },
+        ],
+    });
+    const r = await llamar(env, '/v1/chat', {
+        metodo: 'POST', token,
+        body: {
+            modelo: 'openai/gpt-oss-20b',
+            mensaje: 'Comprueba esto',
+            permitirBusqueda: false,
+            forzarBusqueda: true,
+        },
+    });
+    const data = await r.json();
+    assert.equal(r.status, 200);
+    assert.equal(data.busquedaEstado, 'ok');
+    assert.equal(data.busquedaProtocolo, 1);
+    assert.equal(estado.tavily.length, 1, 'una búsqueda obligatoria');
+    assert.deepEqual(estado.groq[0].tool_choice, {
+        type: 'function',
+        function: { name: 'busqueda_web' },
+    });
+});
+
+test('tool call inválida o múltiple no ejecuta Tavily', async () => {
+    const casos = [
+        [{ id: 'x', type: 'function', function: { name: 'otra_funcion', arguments: '{}' } }],
+        [...toolBusqueda({ consulta: 'consulta uno' }, 'a'), ...toolBusqueda({ consulta: 'consulta dos' }, 'b')],
+        [{ id: 'x', type: 'function', function: { name: 'busqueda_web', arguments: '{json roto' } }],
+        toolBusqueda({ consulta: 'consulta', campo_no_permitido: 'x' }),
+    ];
+    for (const toolCalls of casos) {
+        const env = envNuevo();
+        const { token } = await crearInvitado(env);
+        const estado = instalarFetchSemantico({ groq: [{ toolCalls, total: 9 }] });
+        const r = await llamar(env, '/v1/chat', {
+            metodo: 'POST', token,
+            body: { modelo: 'openai/gpt-oss-20b', mensaje: 'consulta', permitirBusqueda: true },
+        });
+        assert.equal(r.status, 200);
+        assert.equal((await r.json()).busquedaEstado, 'consulta_invalida');
+        assert.equal(estado.tavily.length, 0, 'Tavily no se ejecuta con tool call inválida');
+    }
+});
+
+test('fallo Tavily semántico conserva solo el primer uso Groq y revierte cupo web', async () => {
+    const env = envNuevo();
+    const { token, db } = await crearInvitado(env);
+    const estado = instalarFetchSemantico({
+        groq: [{ toolCalls: toolBusqueda({ consulta: 'noticias Bolivia hoy', tema: 'news', recencia: 'day' }), total: 17 }],
+        tavilyStatus: 503,
+    });
+    const r = await llamar(env, '/v1/chat', {
+        metodo: 'POST', token,
+        body: { modelo: 'openai/gpt-oss-20b', mensaje: 'Cuéntame qué está pasando', permitirBusqueda: true },
+    });
+    const data = await r.json();
+    assert.equal(data.busquedaEstado, 'fallo_proveedor');
+    assert.equal(estado.groq.length, 1, 'no intenta síntesis sin evidencia');
+    const usuario = await db.buscarPorToken(token);
+    const uso = await db.obtenerUso(usuario.id);
+    assert.equal(uso.tokens, 17, 'la decisión Groq sí se contabiliza');
+    assert.equal(uso.solicitudes, 1);
+    assert.equal(await db.contarConsultasBusqueda(usuario.id, diaActual()), 0, 'cupo web revertido');
+});
+
+test('fallo de síntesis Groq mantiene acotado el uso Tavily y contabiliza los dos intentos', async () => {
+    const env = envNuevo();
+    const { token, db } = await crearInvitado(env);
+    const estado = instalarFetchSemantico({
+        groq: [
+            { toolCalls: toolBusqueda({ consulta: 'noticias verificadas Bolivia' }), total: 19 },
+            { status: 503 },
+        ],
+    });
+    const r = await llamar(env, '/v1/chat', {
+        metodo: 'POST', token,
+        body: { modelo: 'openai/gpt-oss-20b', mensaje: 'Dame la actualización', permitirBusqueda: true },
+    });
+    assert.equal(r.status, 200, 'el fallo posterior conserva un mensaje recuperable');
+    const data = await r.json();
+    assert.equal(data.busquedaEstado, 'fallo_sintesis');
+    assert.equal(data.busquedaProtocolo, 1);
+    assert.match(data.respuesta, /no pude preparar la respuesta/i);
+    const usuario = await db.buscarPorToken(token);
+    const uso = await db.obtenerUso(usuario.id);
+    assert.equal(estado.groq.length, 2, 'la decisión y el intento de síntesis llegaron a Groq');
+    assert.equal(uso.tokens, 19, 'solo se cobran tokens reales devueltos por Groq');
+    assert.equal(uso.solicitudes, 2, 'ambos intentos al proveedor cuentan como solicitudes');
+    assert.equal(await db.contarConsultasBusqueda(usuario.id, diaActual()), 1, 'Tavily respondió: consume cupo y evita reintentos externos ilimitados');
 });

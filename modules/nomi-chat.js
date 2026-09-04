@@ -37,13 +37,10 @@ function nomiUrlFuenteSegura(u) {
     }
 }
 
-// Mensaje de resultados de búsqueda web NoMi. Renderizado 100% seguro (CSP /
-// Trusted Types): solo createElement/textContent/appendChild, sin HTML crudo.
-// Máximo 3 resultados (los que llegan del Worker), cada uno con título/snippet y
-// fuente clicable SOLO si la URL pasa nomiUrlFuenteSegura (http/https, sin
-// query/hash); enlaces con target="_blank" y rel="noopener noreferrer". Sin
-// truncamientos arbitrarios adicionales a los ya aplicados por el Worker.
-function agregarMensajeConFuentes(resultados) {
+// Respuesta sintetizada con fuentes web compactas. Renderizado 100% seguro
+// (CSP/Trusted Types): solo nodos DOM y textContent, nunca HTML crudo. Los
+// snippets usados por el modelo no se muestran al usuario como un volcado.
+function agregarMensajeConFuentes(texto, resultados) {
     const chatBody = document.getElementById('nomi-chat-body');
     if (!chatBody) return null;
     const color = '#34a853';
@@ -53,19 +50,20 @@ function agregarMensajeConFuentes(resultados) {
     nombreMsg.style.color = color;
     nombreMsg.textContent = NOMBRE_ASISTENTE + ':';
     msg.appendChild(nombreMsg);
-    msg.appendChild(document.createTextNode(' Esto es lo que encontré en la web:'));
+    msg.appendChild(document.createTextNode(' ' + String(texto || '')));
     const lista = (Array.isArray(resultados) ? resultados : []).slice(0, 3);
-    if (lista.length === 0) {
-        const vacio = document.createElement('div');
-        vacio.textContent = '(sin resultados)';
-        msg.appendChild(vacio);
+    if (lista.length > 0) {
+        const etiqueta = document.createElement('div');
+        etiqueta.style.cssText = 'color:#aaa;margin-top:7px;font-size:11px;';
+        etiqueta.textContent = 'Fuentes:';
+        msg.appendChild(etiqueta);
     }
-    lista.forEach((r) => {
+    lista.forEach((r, indice) => {
         const item = document.createElement('div');
-        item.style.cssText = 'margin-top:6px;';
+        item.style.cssText = 'margin-top:3px;font-size:11px;';
         const lineaTitulo = document.createElement('div');
         const vineta = document.createElement('b');
-        vineta.textContent = '• ';
+        vineta.textContent = '[' + (indice + 1) + '] ';
         lineaTitulo.appendChild(vineta);
         const urlSegura = nomiUrlFuenteSegura(r && r.url);
         if (urlSegura && r.titulo) {
@@ -90,19 +88,15 @@ function agregarMensajeConFuentes(resultados) {
             spanTitulo.textContent = String(r.titulo);
             lineaTitulo.appendChild(spanTitulo);
         }
-        item.appendChild(lineaTitulo);
-        if (r && r.contenido) {
-            const snippet = document.createElement('div');
-            snippet.style.cssText = 'color:#ccc;';
-            snippet.textContent = String(r.contenido);
-            item.appendChild(snippet);
+        if (r && r.fecha) {
+            const fecha = document.createElement('span');
+            fecha.style.color = '#888';
+            fecha.textContent = ' · ' + String(r.fecha);
+            lineaTitulo.appendChild(fecha);
         }
+        item.appendChild(lineaTitulo);
         msg.appendChild(item);
     });
-    const nota = document.createElement('div');
-    nota.style.cssText = 'color:#888;margin-top:4px;font-size:11px;';
-    nota.textContent = 'La consulta se envió a Tavily (proveedor externo) a través del servidor NoMi.';
-    msg.appendChild(nota);
     chatBody.appendChild(msg);
     chatBody.scrollTop = chatBody.scrollHeight;
     return msg;
@@ -245,4 +239,3 @@ function mostrarNotificacionTemporal(msg) {
     document.body.appendChild(div);
     setTimeout(() => div.remove(), 3000);
 }
-

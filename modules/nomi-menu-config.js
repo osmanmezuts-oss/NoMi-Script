@@ -370,6 +370,8 @@ function mostrarMenu() {
         // Al cambiar de modo se limpia el estado HUD transitorio y la cuota
         // obsoleta (nunca se hereda límite/acceso inválido/capacidad de NoMi a Personal).
         NoMiState.usoNoMi = null;
+        NoMiState.reintentarPregunta = '';
+        NoMiState.reintentarBusquedaForzada = false;
         establecerEstadoHud(null);
         actualizarQuotaHud();
         mostrarNotificacionTemporal(`🌐 Modo de acceso: ${m === 'nomi' ? 'Acceso NoMi' : 'API Personal'}`);

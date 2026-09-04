@@ -47,5 +47,7 @@ window.NoMiState = {
     // 'limite' | 'capacidad' | 'sin_conexion'. El "Pensando…" se deriva de isWaiting.
     estadoHud: null,
     usoNoMi: null,
-    reintentarPregunta: ''
+    reintentarPregunta: '',
+    // Conserva si el reintento debe obligar la búsqueda web (estado transitorio).
+    reintentarBusquedaForzada: false
 };

@@ -16,7 +16,7 @@
 import { ApiError, E } from './errores.js';
 import { CATALOGO, modeloPermitido, catalogoPublico } from './catalogo.js';
 import { BaseDatos } from './db.js';
-import { llamarGroq } from './groq.js';
+import { llamarGroq, MODO_GROQ, HERRAMIENTAS_BUSQUEDA_TOKENS } from './groq.js';
 import { consultarClima } from './clima.js';
 import { consultarBusqueda } from './tavily.js';
 import { RateLimiterDO } from './rate-limiter-do.js';
@@ -133,6 +133,193 @@ async function handlerUso(env, request) {
     });
 }
 
+const TEMAS_BUSQUEDA = new Set(['general', 'news', 'finance']);
+const RECENCIAS_BUSQUEDA = new Set(['day', 'week', 'month', 'year']);
+
+function bytesTexto(valor) {
+    return new TextEncoder().encode(String(valor || '')).length;
+}
+
+function recortarUtf8(valor, maxBytes) {
+    const texto = String(valor || '');
+    const bytes = new TextEncoder().encode(texto);
+    if (bytes.length <= maxBytes) return texto;
+    let fin = Math.max(0, maxBytes);
+    while (fin > 0 && (bytes[fin] & 0xC0) === 0x80) fin--;
+    return new TextDecoder().decode(bytes.subarray(0, fin)).trimEnd();
+}
+
+function tokensSistemaGroq(modo) {
+    if (modo === MODO_GROQ.DECISION_BUSQUEDA || modo === MODO_GROQ.BUSQUEDA_FORZADA) return RESERVA.SISTEMA_BUSQUEDA_TOKENS;
+    if (modo === MODO_GROQ.SINTESIS_BUSQUEDA) return RESERVA.SISTEMA_SINTESIS_BUSQUEDA_TOKENS;
+    return RESERVA.SISTEMA_TOKENS;
+}
+
+function tokensEntradaGroq(mensajes) {
+    return (mensajes || []).reduce((total, mensaje) => {
+        let bytes = bytesTexto(mensaje && mensaje.content);
+        if (mensaje && mensaje.tool_calls) bytes += bytesTexto(JSON.stringify(mensaje.tool_calls));
+        if (mensaje && mensaje.tool_call_id) bytes += bytesTexto(mensaje.tool_call_id);
+        if (mensaje && mensaje.name) bytes += bytesTexto(mensaje.name);
+        return total + bytes;
+    }, 0) * RESERVA.TOKENS_POR_BYTE_ENTRADA;
+}
+
+// Ejecuta UNA petición real a Groq con el mismo ciclo completo de reserva,
+// rollback y conciliación. El orquestador semántico la invoca una vez para la
+// decisión/respuesta normal y, solo si hubo herramienta, otra para la síntesis.
+// Así cada petición del proveedor queda contabilizada en DO, D1 y bolsa.
+async function ejecutarGroqContabilizado(env, db, usuario, { modelo, mensajes, maxTokens, modo }) {
+    const uso = await db.obtenerUso(usuario.id);
+    if (uso.tokens >= CREDITOS.INVITADO_POR_MES) throw E.cuotaAgotada();
+    await db.obtenerCreditos();
+
+    const doObj = env.RATE_LIMITER.get(env.RATE_LIMITER.idFromName('global'));
+    const snap = await (await doObj.fetch('https://internal/snapshot', { method: 'GET' })).json();
+    const hoy = diaActual();
+    const primerUsoCandidato = !usuario.primer_uso_dia || usuario.primer_uso_dia !== hoy;
+    const cap = decidirModo({ primerUsoCandidato, compartidaUsada: snap.compartida_usada });
+    if (cap.modo === CAPACIDAD.RESERVA_PROTEGIDA && !primerUsoCandidato) throw E.capacidadTemporal();
+
+    const maxSalida = Math.min(
+        Number(maxTokens) > 0 ? Number(maxTokens) : RESERVA.MAX_SALIDA_TOKENS,
+        cap.max_tokens,
+        RESERVA.MAX_SALIDA_TOKENS,
+    );
+    if (maxSalida <= 0) throw E.capacidadTemporal();
+
+    const herramientasTokens = (modo === MODO_GROQ.DECISION_BUSQUEDA || modo === MODO_GROQ.BUSQUEDA_FORZADA)
+        ? HERRAMIENTAS_BUSQUEDA_TOKENS * RESERVA.TOKENS_POR_BYTE_ENTRADA
+        : 0;
+    const tokensReservados = tokensEntradaGroq(mensajes)
+        + tokensSistemaGroq(modo)
+        + herramientasTokens
+        + maxSalida
+        + RESERVA.MARGEN_TOKEN;
+    if (tokensReservados > LIMITES_GROQ.tokens_por_minuto) {
+        throw E.parametrosInvalidos('La petición excede el límite de tokens por minuto.');
+    }
+
+    const reservaResp = await doObj.fetch('https://internal/reservar', {
+        method: 'POST',
+        body: JSON.stringify({ usuarioId: usuario.id, tokens: tokensReservados, solicitudes: 1, primerUso: primerUsoCandidato }),
+    });
+    const reserva = await reservaResp.json();
+    if (!reserva.permitido) throw E.capacidadTemporal();
+
+    const reservaUsuario = await db.reservarUso(usuario.id, tokensReservados);
+    if (!reservaUsuario) {
+        await doObj.fetch('https://internal/liberar', { method: 'POST', body: JSON.stringify({ reservaId: reserva.reservaId }) });
+        throw E.cuotaAgotada();
+    }
+    const reservaBolsa = await db.reservarBolsa(tokensReservados);
+    if (!reservaBolsa) {
+        await db.reconciliarUso(usuario.id, tokensReservados);
+        await doObj.fetch('https://internal/liberar', { method: 'POST', body: JSON.stringify({ reservaId: reserva.reservaId }) });
+        throw E.capacidadTemporal();
+    }
+
+    let resultado;
+    try {
+        resultado = await llamarGroq(env, { modelo, mensajes, max_tokens: maxSalida, modo });
+    } catch (err) {
+        await doObj.fetch('https://internal/liberar', { method: 'POST', body: JSON.stringify({ reservaId: reserva.reservaId }) });
+        await db.reconciliarUso(usuario.id, tokensReservados);
+        await db.reconciliarBolsa(tokensReservados);
+        throw err;
+    }
+
+    const real = resultado.usage.tokens;
+    await doObj.fetch('https://internal/reconciliar', { method: 'POST', body: JSON.stringify({ reservaId: reserva.reservaId, real }) });
+    if (real <= tokensReservados) {
+        const liberar = tokensReservados - real;
+        if (liberar > 0) {
+            await db.reconciliarUso(usuario.id, liberar);
+            await db.reconciliarBolsa(liberar);
+        }
+    } else {
+        const extra = real - tokensReservados;
+        await db.sumarUso(usuario.id, { tokens: extra, solicitudes: 0 });
+        const bolsaOk = await db.consumirBolsa(extra);
+        if (!bolsaOk) await db.agotarBolsa();
+        registrarEvidencia('uso_groq_exceso', { extra, real, reservado: tokensReservados });
+    }
+    await db.marcarUsoHoy(usuario.id);
+    usuario.primer_uso_dia = hoy;
+    return resultado;
+}
+
+function normalizarSolicitudBusqueda(datos, permitirTipo = false) {
+    if (!datos || typeof datos !== 'object' || Array.isArray(datos)) return null;
+    const permitidas = new Set(['consulta', 'tema', 'recencia']);
+    if (permitirTipo) permitidas.add('tipo');
+    if (Object.keys(datos).some(clave => !permitidas.has(clave))) return null;
+    if (permitirTipo && datos.tipo !== 'busqueda') return null;
+    const consulta = typeof datos.consulta === 'string' ? datos.consulta.trim() : '';
+    if (consulta.length < 2 || consulta.length > 300 || bytesTexto(consulta) > RESERVA.MAX_CONSULTA_BUSQUEDA_BYTES) return null;
+    if (datos.tema !== undefined && !TEMAS_BUSQUEDA.has(datos.tema)) return null;
+    if (datos.recencia !== undefined && !RECENCIAS_BUSQUEDA.has(datos.recencia)) return null;
+    return {
+        consulta,
+        tema: TEMAS_BUSQUEDA.has(datos.tema) ? datos.tema : 'general',
+        recencia: RECENCIAS_BUSQUEDA.has(datos.recencia) ? datos.recencia : null,
+    };
+}
+
+async function ejecutarBusquedaConCuota(env, db, usuario, solicitud, paraSintesis = false) {
+    const hoy = diaActual();
+    const registro = await db.intentarRegistrarBusqueda(usuario.id, hoy);
+    if (!registro.ok) {
+        return { estado: 'limite_diario', respuesta: 'Has superado el límite de búsquedas web por hoy (20). Inténtalo mañana.' };
+    }
+    const busqueda = await consultarBusqueda(env, solicitud.consulta, {
+        ...solicitud,
+        detalle: paraSintesis ? 'sintesis' : 'compacto',
+    });
+    if (busqueda.error === 'sin_resultados') {
+        return { estado: 'sin_resultados', respuesta: 'No encontré fuentes útiles para responder esa consulta con información actual.' };
+    }
+    if (busqueda.error === 'fallo_proveedor') {
+        try { await db.liberarConsultaBusqueda(usuario.id, hoy); } catch { /* best effort */ }
+        return { estado: 'fallo_proveedor', respuesta: 'No se pudo consultar la web ahora. Reintenta.' };
+    }
+    return { estado: 'ok', resultados: busqueda.resultados };
+}
+
+function extraerSolicitudDeToolCalls(toolCalls) {
+    if (!Array.isArray(toolCalls) || toolCalls.length !== 1) return null;
+    const llamada = toolCalls[0];
+    if (!llamada || llamada.type !== 'function' || !llamada.function
+        || llamada.function.name !== 'busqueda_web') return null;
+    try {
+        return normalizarSolicitudBusqueda(JSON.parse(llamada.function.arguments || '{}'));
+    } catch {
+        return null;
+    }
+}
+
+function preguntaActualDesdeMensaje(mensaje) {
+    const texto = String(mensaje || '');
+    const marca = 'Pregunta del usuario:';
+    const indice = texto.lastIndexOf(marca);
+    const actual = indice >= 0 ? texto.slice(indice + marca.length).trim() : texto.trim();
+    return recortarUtf8(actual, 1200);
+}
+
+function construirPromptSintesis(mensaje, solicitud, resultados) {
+    const evidencia = resultados.slice(0, 3).map((r, indice) => ({
+        id: indice + 1,
+        titulo: r.titulo,
+        contenido: r.contenido,
+        fecha: r.fecha || '',
+    }));
+    return 'Redacta la respuesta final a partir de estos datos JSON:\n' + JSON.stringify({
+        pregunta: preguntaActualDesdeMensaje(mensaje),
+        consulta_resuelta: solicitud.consulta,
+        evidencia,
+    });
+}
+
 async function handlerChat(env, request) {
     const { db, usuario } = await autenticarInvitado(env, request);
 
@@ -187,41 +374,24 @@ async function handlerChat(env, request) {
     // cuota mensual, bolsa global y RateLimiterDO. NO guarda ni loguea la
     // consulta, snippets ni resultados.
     if (herramienta && herramienta.tipo === 'busqueda') {
-        const consulta = typeof herramienta.consulta === 'string' ? herramienta.consulta.trim() : '';
-        // Código específico para validación de la consulta (distinto del
-        // 'parametros-invalidos' genérico que devuelve un Worker ANTIGUO al no
-        // conocer la herramienta): el cliente distingue ambos de forma estable.
-        if (!consulta || consulta.length < 2 || consulta.length > 300) {
-            throw new ApiError('consulta-busqueda-invalida', 'Indica qué buscar (entre 2 y 300 caracteres).', 400);
+        const solicitud = normalizarSolicitudBusqueda(herramienta, true);
+        if (!solicitud) {
+            throw new ApiError('consulta-busqueda-invalida', 'Indica una búsqueda válida.', 400);
         }
-        const bytesConsulta = new TextEncoder().encode(consulta).length;
-        if (bytesConsulta > RESERVA.MAX_CONSULTA_BUSQUEDA_BYTES) {
-            throw new ApiError('consulta-busqueda-invalida', 'La búsqueda es demasiado larga.', 400);
+        const busqueda = await ejecutarBusquedaConCuota(env, db, usuario, solicitud);
+        if (busqueda.estado !== 'ok') {
+            return json({ ok: true, respuesta: busqueda.respuesta, busquedaEstado: busqueda.estado });
         }
-        const hoyBusq = diaActual();
-        const registroBusq = await db.intentarRegistrarBusqueda(usuario.id, hoyBusq);
-        // `busquedaEstado`: señal explícita y estable para el cliente (nunca se
-        // infiere del texto humano). Valores: ok | sin_resultados | limite_diario |
-        // fallo_proveedor.
-        if (!registroBusq.ok) {
-            return json({ ok: true, respuesta: 'Has superado el límite de búsquedas web por hoy (20). Inténtalo mañana.', busquedaEstado: 'limite_diario' });
-        }
-        const busqueda = await consultarBusqueda(env, consulta);
-        if (busqueda.error === 'sin_resultados') {
-            // La petición SÍ llegó a Tavily: consume cupo (evita sondear sin límite).
-            return json({ ok: true, respuesta: 'No encontré resultados útiles para esa búsqueda. Prueba con otros términos.', busquedaEstado: 'sin_resultados' });
-        }
-        if (busqueda.error === 'fallo_proveedor') {
-            // Fallo técnico de Tavily/red o rechazo del proveedor (401/403/429/5xx):
-            // culpa ajena al usuario -> revertir su cupo y permitir reintento.
-            try { await db.liberarConsultaBusqueda(usuario.id, hoyBusq); } catch { /* no bloquea la respuesta */ }
-            return json({ ok: true, respuesta: 'No se pudo realizar la búsqueda ahora. Reintenta.', busquedaEstado: 'fallo_proveedor' });
-        }
+        // Compatibilidad con bundles anteriores: esta ruta directa conserva la
+        // respuesta de resultados sin Groq. Los clientes nuevos usan la decisión
+        // semántica del chat normal y reciben una síntesis.
         return json({ ok: true, busquedaEstado: 'ok', resultados: busqueda.resultados });
     }
 
     const modelo = String(body.modelo || '');
     const mensaje = typeof body.mensaje === 'string' ? body.mensaje : '';
+    const forzarBusqueda = body.forzarBusqueda === true;
+    const permitirBusqueda = body.permitirBusqueda === true || forzarBusqueda;
 
     if (!modeloPermitido(modelo)) throw E.modeloNoPermitido();
     if (!mensaje || !mensaje.trim()) throw E.parametrosInvalidos('Falta el mensaje.');
@@ -230,108 +400,79 @@ async function handlerChat(env, request) {
     const bytesEntrada = new TextEncoder().encode(mensaje).length;
     if (bytesEntrada > RESERVA.MAX_ENTRADA_BYTES) throw E.parametrosInvalidos('Mensaje demasiado largo.');
 
-    // Cuota mensual del invitado (ya contabilizada). La reserva atómica está más abajo.
-    const uso = await db.obtenerUso(usuario.id);
-    if (uso.tokens >= CREDITOS.INVITADO_POR_MES) throw E.cuotaAgotada();
-
-    // Asegura el período mensual de la bolsa (reset sin rollover). El DO es quien
-    // decide la fuente diaria; la bolsa mensual se mantiene como estaban.
-    await db.obtenerCreditos();
-
-    // Capacidad diaria real del proveedor (fuente de verdad: el DO).
-    const id = env.RATE_LIMITER.idFromName('global');
-    const doObj = env.RATE_LIMITER.get(id);
-    const snap = await (await doObj.fetch('https://internal/snapshot', { method: 'GET' })).json();
-
-    const hoy = diaActual();
-    const primerUsoCandidato = !usuario.primer_uso_dia || usuario.primer_uso_dia !== hoy;
-    const cap = decidirModo({ primerUsoCandidato, compartidaUsada: snap.compartida_usada });
-
-    // Reserva protegida agotada y el usuario ya usó hoy: no queda capacidad para él.
-    if (cap.modo === CAPACIDAD.RESERVA_PROTEGIDA && !primerUsoCandidato) throw E.capacidadTemporal();
-
-    const maxSalida = Math.min(cap.max_tokens, RESERVA.MAX_SALIDA_TOKENS);
-
-    // Límite conservador y verificable: peor caso 1 token por byte de entrada.
-    // máximo posible = entrada (peor caso) + mensaje de sistema (añadido por
-    // llamarGroq) + salida + margen. Si NO cabe bajo tokens_por_minuto del
-    // proveedor, se rechaza ANTES de llamar a Groq (sin Math.min).
-    const tokensEntrada = bytesEntrada * RESERVA.TOKENS_POR_BYTE_ENTRADA;
-    const tokensNecesarios = tokensEntrada + RESERVA.SISTEMA_TOKENS + maxSalida + RESERVA.MARGEN_TOKEN;
-    if (tokensNecesarios > LIMITES_GROQ.tokens_por_minuto) {
-        throw E.parametrosInvalidos('La petición excede el límite de tokens por minuto.');
-    }
-    const tokensReservados = tokensNecesarios;
-
-    // 1) Reserva de capacidad diaria en el DO (única fuente de verdad concurrente).
-    //    Decide atómicamente la fuente: reserva protegida de primer uso o bolsa compartida.
-    //    El DO usa SOLO el id opaco del usuario para evitar doble prioridad.
-    const r1 = await doObj.fetch('https://internal/reservar', {
-        method: 'POST',
-        body: JSON.stringify({ usuarioId: usuario.id, tokens: tokensReservados, solicitudes: 1, primerUso: primerUsoCandidato }),
+    // Primera llamada: el modelo responde directamente o solicita una única
+    // búsqueda semántica. La preferencia desactivada usa el chat normal sin tools.
+    const primera = await ejecutarGroqContabilizado(env, db, usuario, {
+        modelo,
+        mensajes: [{ role: 'user', content: mensaje }],
+        maxTokens: RESERVA.MAX_SALIDA_TOKENS,
+        modo: forzarBusqueda
+            ? MODO_GROQ.BUSQUEDA_FORZADA
+            : (permitirBusqueda ? MODO_GROQ.DECISION_BUSQUEDA : MODO_GROQ.NORMAL),
     });
-    const reserva = await r1.json();
-    if (!reserva.permitido) throw E.capacidadTemporal();
-
-    // 2) Reserva atómica de la cuota mensual del invitado (previene sobreconsumo por concurrencia).
-    const reservaUsuario = await db.reservarUso(usuario.id, tokensReservados);
-    if (!reservaUsuario) {
-        // Rollback: liberar la reserva de capacidad ya tomada en el DO.
-        await doObj.fetch('https://internal/liberar', { method: 'POST', body: JSON.stringify({ reservaId: reserva.reservaId }) });
-        throw E.cuotaAgotada();
+    if (!permitirBusqueda || primera.toolCalls.length === 0) {
+        if (!primera.texto.trim()) throw E.proveedorNoDisponible();
+        return json({ ok: true, respuesta: primera.texto, busquedaProtocolo: 1 });
     }
 
-    // 3) Reserva atómica de la bolsa global (descuento real por uso de cada chat).
-    const reservaBolsa = await db.reservarBolsa(tokensReservados);
-    if (!reservaBolsa) {
-        // Rollback: liberar cuota individual y reserva de capacidad del DO.
-        await db.reconciliarUso(usuario.id, tokensReservados);
-        await doObj.fetch('https://internal/liberar', { method: 'POST', body: JSON.stringify({ reservaId: reserva.reservaId }) });
-        throw E.capacidadTemporal();
+    // Solo se acepta exactamente una llamada a la función permitida. No se
+    // ejecutan herramientas desconocidas, múltiples ni argumentos no válidos.
+    const solicitud = extraerSolicitudDeToolCalls(primera.toolCalls);
+    if (!solicitud) {
+        return json({
+            ok: true,
+            respuesta: 'No pude preparar una búsqueda web segura. Reformula la pregunta.',
+            busquedaEstado: 'consulta_invalida',
+            busquedaProtocolo: 1,
+        });
     }
 
-    // 4) Llamada a Groq (en tests se sustituye el fetch global).
-    let res;
+    const busqueda = await ejecutarBusquedaConCuota(env, db, usuario, solicitud, true);
+    if (busqueda.estado !== 'ok') {
+        return json({ ok: true, respuesta: busqueda.respuesta, busquedaEstado: busqueda.estado, busquedaProtocolo: 1 });
+    }
+
+    // Segunda y última llamada: sintetiza evidencia saneada. No se vuelven a
+    // ofrecer tools, por lo que el ciclo tiene como máximo una búsqueda.
+    let sintesis;
     try {
-        res = await llamarGroq(env, { modelo, mensajes: [{ role: 'user', content: mensaje }], max_tokens: maxSalida });
+        sintesis = await ejecutarGroqContabilizado(env, db, usuario, {
+            modelo,
+            mensajes: [{ role: 'user', content: construirPromptSintesis(mensaje, solicitud, busqueda.resultados) }],
+            // La instrucción pide ≤160 palabras; 320 tokens dejan margen para
+            // español y citas sin permitir una respuesta desproporcionada.
+            maxTokens: 320,
+            modo: MODO_GROQ.SINTESIS_BUSQUEDA,
+        });
     } catch (err) {
-        // Revertir reservas si la llamada falla: liberar la capacidad (incluida la
-        // marca de primer uso) y la bolsa/cuota, para no bloquear capacidad ni bolsa.
-        await doObj.fetch('https://internal/liberar', { method: 'POST', body: JSON.stringify({ reservaId: reserva.reservaId }) });
-        await db.reconciliarUso(usuario.id, tokensReservados);
-        await db.reconciliarBolsa(tokensReservados);
+        // Tavily sí respondió: la consulta externa consume cupo igual que un
+        // resultado vacío. No se revierte aquí, porque hacerlo permitiría repetir
+        // Tavily sin límite cuando la segunda llamada Groq está sin capacidad.
+        if (err instanceof ApiError && err.code === 'proveedor-no-disponible') {
+            return json({
+                ok: true,
+                respuesta: 'Encontré fuentes, pero no pude preparar la respuesta. Reintenta.',
+                busquedaEstado: 'fallo_sintesis',
+                busquedaProtocolo: 1,
+            });
+        }
         throw err;
     }
-
-    // 5) Reconciliación: el uso REAL del proveedor es la fuente de verdad.
-    const real = res.usage.tokens;
-    await doObj.fetch('https://internal/reconciliar', { method: 'POST', body: JSON.stringify({ reservaId: reserva.reservaId, real }) });
-
-    // --- Cuota individual mensual: liberar lo sobreservado; si real excede, contabilizarlo. ---
-    if (real <= tokensReservados) {
-        const lib = tokensReservados - real;
-        if (lib > 0) await db.reconciliarUso(usuario.id, lib);
-    } else {
-        const extra = real - tokensReservados;
-        await db.sumarUso(usuario.id, { tokens: extra, solicitudes: 0 }); // cuenta el real, nunca se descarta
-        registrarEvidencia('cuota_individual_exceso', { extra, real, reservado: tokensReservados });
+    if (!sintesis.texto.trim()) {
+        return json({
+            ok: true,
+            respuesta: 'Encontré fuentes, pero no pude preparar la respuesta. Reintenta.',
+            busquedaEstado: 'fallo_sintesis',
+            busquedaProtocolo: 1,
+        });
     }
 
-    // --- Bolsa global: devolver lo no usado; si real excede, descontar el exceso (sin doble gasto). ---
-    if (real <= tokensReservados) {
-        const lib = tokensReservados - real;
-        if (lib > 0) await db.reconciliarBolsa(lib);
-    } else {
-        const extra = real - tokensReservados;
-        const ok = await db.consumirBolsa(extra);
-        if (!ok) await db.agotarBolsa(); // el uso real ocurrió; no se descarta, se deja evidencia
-        registrarEvidencia('bolsa_exceso', { extra, real, reservado: tokensReservados });
-    }
-
-    // Marca el día del uso para la prioridad de primer uso diario (idempotente).
-    await db.marcarUsoHoy(usuario.id);
-
-    return json({ ok: true, respuesta: res.texto });
+    const fuentes = busqueda.resultados.map((resultado) => ({
+        titulo: resultado.titulo,
+        url: resultado.url,
+        fecha: resultado.fecha || '',
+    }));
+    return json({ ok: true, respuesta: sintesis.texto, busquedaEstado: 'ok', busquedaProtocolo: 1, fuentes });
 }
 
 // Evidencia técnica SIN contenido de usuario (no se guarda prompt/respuesta).

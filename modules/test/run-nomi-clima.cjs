@@ -122,6 +122,7 @@ const pruebas = `
         NoMiState.isWaiting = false;
         NoMiState.historial = [];
         NoMiState.reintentarPregunta = '';
+        NoMiState.reintentarBusquedaForzada = false;
         NoMiState.ubicacionActivada = false;
         NoMiState.ubicacionActual = null;
         NoMiState.busquedaWebActiva = false;
@@ -195,7 +196,7 @@ const pruebas = `
     activarNoMi();
     let llamadasChat3 = 0, cuerpoNormal = null;
     responder = async (url, opts) => {
-        if (url.includes('/v1/chat')) { llamadasChat3++; cuerpoNormal = JSON.parse(opts.body); return { ok: true, respuesta: 'respuesta normal' }; }
+        if (url.includes('/v1/chat')) { llamadasChat3++; cuerpoNormal = JSON.parse(opts.body); return { ok: true, respuesta: 'respuesta normal', busquedaProtocolo: 1 }; }
         if (url.includes('/v1/usage')) return { periodo: '2026-08', cuota_mensual_invitado: 50, tokens_usados: 0, solicitudes_usadas: 1 };
         throw new Error('inesperado en test 3: ' + url);
     };
@@ -209,7 +210,7 @@ const pruebas = `
     setClimaAutomatico(false);
     let llamadasCtx = 0, cuerpoCtx = null;
     responder = async (url, opts) => {
-        if (url.includes('/v1/chat')) { llamadasCtx++; cuerpoCtx = JSON.parse(opts.body); return { ok: true, respuesta: 'respuesta normal' }; }
+        if (url.includes('/v1/chat')) { llamadasCtx++; cuerpoCtx = JSON.parse(opts.body); return { ok: true, respuesta: 'respuesta normal', busquedaProtocolo: 1 }; }
         if (url.includes('/v1/usage')) return { periodo: '2026-08', cuota_mensual_invitado: 50, tokens_usados: 0, solicitudes_usadas: 1 };
         throw new Error('inesperado en test 3b: ' + url);
     };
@@ -225,7 +226,7 @@ const pruebas = `
     NoMiState.climaAutomatico = false;
     let llamadasDir = 0, cuerpoDir = null;
     responder = async (url, opts) => {
-        if (url.includes('/v1/chat')) { llamadasDir++; cuerpoDir = JSON.parse(opts.body); return { ok: true, respuesta: 'respuesta normal' }; }
+        if (url.includes('/v1/chat')) { llamadasDir++; cuerpoDir = JSON.parse(opts.body); return { ok: true, respuesta: 'respuesta normal', busquedaProtocolo: 1 }; }
         if (url.includes('/v1/usage')) return { periodo: '2026-08', cuota_mensual_invitado: 50, tokens_usados: 0, solicitudes_usadas: 1 };
         throw new Error('inesperado en test 3c: ' + url);
     };
@@ -335,7 +336,7 @@ const pruebas = `
     // Defensa SOLO en modo NoMi: la respuesta empieza por !search y NO se muestra.
     activarNoMi();
     responder = async (url, opts) => {
-        if (url.includes('/v1/chat')) return { ok: true, respuesta: '!search Resultado inventado de la web' };
+        if (url.includes('/v1/chat')) return { ok: true, respuesta: '!search Resultado inventado de la web', busquedaProtocolo: 1 };
         throw new Error('inesperado en defensa NoMi: ' + url);
     };
     await preguntar('dime algo sobre X');

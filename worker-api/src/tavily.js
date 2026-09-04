@@ -9,14 +9,24 @@
 
 const TAVILY_URL = 'https://api.tavily.com/search';
 const MAX_RESULTADOS = 3;
-const MAX_TITULO_CHARS = 70;
-const MAX_CONTENIDO_CHARS = 110;
+const MAX_TITULO_COMPACTO_CHARS = 70;
+const MAX_TITULO_SINTESIS_CHARS = 90;
+const MAX_TITULO_SINTESIS_BYTES = 180;
+// La síntesis necesita evidencia suficiente; el navegador mostrará solo la
+// respuesta y los enlaces, no este contenido completo.
+const MAX_CONTENIDO_COMPACTO_CHARS = 110;
+const MAX_CONTENIDO_SINTESIS_CHARS = 300;
+const MAX_CONTENIDO_SINTESIS_BYTES = 600;
+const MAX_FECHA_BYTES = 80;
+const MAX_URL_CHARS = 500;
+const TEMAS = new Set(['general', 'news', 'finance']);
+const RECENCIAS = new Set(['day', 'week', 'month', 'year']);
 
 // Sanitiza una URL del proveedor: solo absolutas http/https (descarta
 // javascript:, data:, ftp:, etc.) y SIN query ni hash (privacidad y brevedad:
 // la fuente queda como página limpia).
 function urlSegura(u) {
-    if (typeof u !== 'string' || !u.trim()) return null;
+    if (typeof u !== 'string' || !u.trim() || u.trim().length > MAX_URL_CHARS) return null;
     try {
         const parsed = new URL(u.trim());
         if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
@@ -30,17 +40,24 @@ function urlSegura(u) {
 
 // Normaliza y recorta un campo de texto del proveedor (sin cortar palabras a la
 // bruta: recorte limpio con elipsis).
-function textoCorto(v, maxChars) {
+function textoCorto(v, maxChars, maxBytes = maxChars * 2) {
     if (typeof v !== 'string') return '';
     const limpio = v.replace(/\s+/g, ' ').trim();
-    if (limpio.length <= maxChars) return limpio;
-    return limpio.slice(0, Math.max(0, maxChars - 1)).trimEnd() + '…';
+    const porCaracteres = limpio.length <= maxChars
+        ? limpio
+        : limpio.slice(0, Math.max(0, maxChars - 1)).trimEnd() + '…';
+    const bytes = new TextEncoder().encode(porCaracteres);
+    if (bytes.length <= maxBytes) return porCaracteres;
+    const elipsis = new TextEncoder().encode('…');
+    let fin = Math.max(0, maxBytes - elipsis.length);
+    while (fin > 0 && (bytes[fin] & 0xC0) === 0x80) fin--;
+    return new TextDecoder().decode(bytes.subarray(0, fin)).trimEnd() + '…';
 }
 
 // Devuelve { resultados: [{ titulo, url, contenido }] } (máx. 3) o
 // { error: 'sin_resultados' | 'fallo_proveedor' }. No lanza: el caller traduce a
 // mensaje humano y decide el rollback del cupo. Sin logs de query/resultados.
-export async function consultarBusqueda(env, consulta) {
+export async function consultarBusqueda(env, consulta, opciones = {}) {
     // Secreto no configurado en el Worker: fallo del lado del servidor/proveedor
     // (revierte cupo y permite reintento cuando se configure).
     if (!env.TAVILY_API_KEY) return { error: 'fallo_proveedor' };
@@ -50,6 +67,22 @@ export async function consultarBusqueda(env, consulta) {
     const timeoutMs = Number(env.TAVILY_TIMEOUT_MS) > 0 ? Number(env.TAVILY_TIMEOUT_MS) : 10000;
     const controlador = new AbortController();
     const temporizador = setTimeout(() => controlador.abort(), timeoutMs);
+    const tema = TEMAS.has(opciones.tema) ? opciones.tema : 'general';
+    const recencia = RECENCIAS.has(opciones.recencia) ? opciones.recencia : null;
+    const paraSintesis = opciones.detalle === 'sintesis';
+    const maxTituloChars = paraSintesis ? MAX_TITULO_SINTESIS_CHARS : MAX_TITULO_COMPACTO_CHARS;
+    const maxTituloBytes = paraSintesis ? MAX_TITULO_SINTESIS_BYTES : MAX_TITULO_COMPACTO_CHARS * 2;
+    const maxContenidoChars = paraSintesis ? MAX_CONTENIDO_SINTESIS_CHARS : MAX_CONTENIDO_COMPACTO_CHARS;
+    const maxContenidoBytes = paraSintesis ? MAX_CONTENIDO_SINTESIS_BYTES : MAX_CONTENIDO_COMPACTO_CHARS * 2;
+    const cuerpo = {
+        query: consulta,
+        max_results: MAX_RESULTADOS,
+        search_depth: 'basic',
+        topic: tema,
+        include_answer: false,
+        include_raw_content: false,
+    };
+    if (recencia) cuerpo.time_range = recencia;
     let r;
     try {
         r = await fetch(TAVILY_URL, {
@@ -58,13 +91,7 @@ export async function consultarBusqueda(env, consulta) {
                 'content-type': 'application/json',
                 'authorization': 'Bearer ' + env.TAVILY_API_KEY,
             },
-            body: JSON.stringify({
-                query: consulta,
-                max_results: MAX_RESULTADOS,
-                search_depth: 'basic',
-                include_answer: false,
-                include_raw_content: false,
-            }),
+            body: JSON.stringify(cuerpo),
             signal: controlador.signal,
         });
     } catch {
@@ -81,14 +108,18 @@ export async function consultarBusqueda(env, consulta) {
     }
     const brutos = Array.isArray(data && data.results) ? data.results : [];
     const resultados = [];
+    const urlsVistas = new Set();
     for (const item of brutos) {
         if (!item || typeof item !== 'object') continue;
         const url = urlSegura(item.url);
-        if (!url) continue;
+        const contenido = textoCorto(item.content, maxContenidoChars, maxContenidoBytes);
+        if (!url || !contenido || urlsVistas.has(url)) continue;
+        urlsVistas.add(url);
         resultados.push({
-            titulo: textoCorto(item.title, MAX_TITULO_CHARS),
+            titulo: textoCorto(item.title, maxTituloChars, maxTituloBytes),
             url,
-            contenido: textoCorto(item.content, MAX_CONTENIDO_CHARS),
+            contenido,
+            fecha: textoCorto(item.published_date, 40, MAX_FECHA_BYTES),
         });
         if (resultados.length >= MAX_RESULTADOS) break;
     }
@@ -96,4 +127,4 @@ export async function consultarBusqueda(env, consulta) {
     return { resultados };
 }
 
-export const _internosBusqueda = { urlSegura, textoCorto };
+export const _internosBusqueda = { urlSegura, textoCorto, TEMAS, RECENCIAS };

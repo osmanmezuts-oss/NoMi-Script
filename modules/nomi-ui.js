@@ -284,9 +284,11 @@ function crearVentanaChat() {
         }
         if (NoMiState.estadoHud === 'sin_conexion' && NoMiState.reintentarPregunta) {
             const p = NoMiState.reintentarPregunta;
+            const forzar = NoMiState.reintentarBusquedaForzada === true;
             NoMiState.reintentarPregunta = '';
-            preguntar(p);
-            return;
+            NoMiState.reintentarBusquedaForzada = false;
+            NoMiState.busquedaForzada = forzar;
+            return preguntar(p);
         }
         consultarUsoNoMi();
     };
@@ -372,7 +374,14 @@ function actualizarBotonAccionHud() {
             texto = 'Activar'; accion = () => mostrarMenu();
         } else if (NoMiState.estadoHud === 'sin_conexion' && NoMiState.reintentarPregunta) {
             texto = 'Reintentar';
-            accion = () => { const p = NoMiState.reintentarPregunta; NoMiState.reintentarPregunta = ''; preguntar(p); };
+            accion = () => {
+                const p = NoMiState.reintentarPregunta;
+                const forzar = NoMiState.reintentarBusquedaForzada === true;
+                NoMiState.reintentarPregunta = '';
+                NoMiState.reintentarBusquedaForzada = false;
+                NoMiState.busquedaForzada = forzar;
+                return preguntar(p);
+            };
         } else if (NoMiState.estadoHud === 'sin_conexion' && !NoMiState.reintentarPregunta) {
             texto = 'Actualizar'; accion = () => consultarUsoNoMi();
         }
@@ -463,6 +472,7 @@ function mapearErrorHudNoMi(err) {
     if (status === 401 || err instanceof NoMiTokenInvalidoError) {
         setNomiAccesoActivo(false);
         NoMiState.reintentarPregunta = '';
+        NoMiState.reintentarBusquedaForzada = false;
         establecerEstadoHud('acceso_invalido');
     } else if (status === 429) {
         establecerEstadoHud('limite');
@@ -472,4 +482,3 @@ function mapearErrorHudNoMi(err) {
         establecerEstadoHud('sin_conexion');
     }
 }
-
