@@ -284,6 +284,10 @@ const pruebas = `
     await preguntar('¿Qué ocurrió con esa medida?');
     assert.ok(botMsgs.some(m => m.includes('No se pudo consultar la web')));
     assert.strictEqual(NoMiState.reintentarPregunta, '¿Qué ocurrió con esa medida?');
+    assert.deepStrictEqual(NoMiState.historial.slice(-2), [
+        { role: 'user', content: '¿Qué ocurrió con esa medida?' },
+        { role: 'assistant', content: 'No se pudo consultar la web ahora. Reintenta.' },
+    ], 'el fallo visible queda en historial para permitir preguntas de seguimiento');
     assert.strictEqual(NoMiState.estadoHud, 'sin_conexion');
     assert.strictEqual(NoMiState.contadorPreguntas, antesFallo);
     assert.strictEqual(NoMiState.reintentarBusquedaForzada, true, 'Tavily falló: el reintento no vuelve a decidir');
@@ -295,7 +299,20 @@ const pruebas = `
     actualizarBotonAccionHud();
     await document.getElementById('nomi-hud-accion').onclick();
     assert.strictEqual(cuerpoReintento.forzarBusqueda, true, 'el HUD reintenta obligando la búsqueda');
+    assert.strictEqual((cuerpoReintento.mensaje.match(/¿Qué ocurrió con esa medida\?/g) || []).length, 1, 'el reintento no duplica la pregunta fallida');
     assert.strictEqual(NoMiState.reintentarPregunta, '', 'éxito limpia reintento');
+
+    activarNoMi();
+    responder = async () => ({ ok: true, respuesta: 'Encontré fuentes, pero no pude preparar la respuesta. Reintenta.', busquedaEstado: 'fallo_sintesis', busquedaProtocolo: 1 });
+    await preguntar('¿Qué ocurrió con las noticias de Santa Cruz?');
+    let cuerpoSeguimiento = null;
+    conUso(async (url, opts) => {
+        cuerpoSeguimiento = JSON.parse(opts.body);
+        return { ok: true, respuesta: 'Se refiere al fallo de la respuesta anterior.', busquedaProtocolo: 1 };
+    });
+    await preguntar('¿Por qué?');
+    assert.match(cuerpoSeguimiento.mensaje, /Encontré fuentes, pero no pude preparar la respuesta/, 'el seguimiento recibe el motivo anterior');
+    assert.match(cuerpoSeguimiento.mensaje, /Pregunta del usuario: ¿Por qué\?/, 'la pregunta de seguimiento se conserva');
 
     activarNoMi();
     responder = async () => ({

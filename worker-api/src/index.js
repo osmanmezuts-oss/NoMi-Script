@@ -313,11 +313,24 @@ function construirPromptSintesis(mensaje, solicitud, resultados) {
         contenido: r.contenido,
         fecha: r.fecha || '',
     }));
-    return 'Redacta la respuesta final a partir de estos datos JSON:\n' + JSON.stringify({
+    return 'Redacta la respuesta final a partir de estos datos JSON. Entrega una respuesta completa, no un título ni un fragmento: para noticias con varias fuentes, resume los hechos principales en 2 o 3 viñetas y cita cada una como [1], [2] o [3]. No enumeres enlaces ni menciones que vas a responder; escribe al menos una oración terminada antes de finalizar.\n' + JSON.stringify({
         pregunta: preguntaActualDesdeMensaje(mensaje),
         consulta_resuelta: solicitud.consulta,
         evidencia,
     });
+}
+
+// Una cabecera incompleta como "Noticias de" no es una respuesta útil, aunque
+// el proveedor haya devuelto HTTP 200. La tratamos igual que un fallo blando de
+// síntesis: no se muestran enlaces aislados y el usuario puede reintentar.
+function sintesisUtil(texto, finishReason) {
+    const limpio = String(texto || '').replace(/\s+/g, ' ').trim();
+    // Una respuesta bien terminada puede cerrar con una o varias referencias
+    // ([1], [2]) después de la oración. Eso no la convierte en un fragmento.
+    return finishReason !== 'length'
+        && limpio.length >= 24
+        && (/[.!?…](?:\s*\[\d+\]){0,3}$/.test(limpio)
+            || /\[\d+\]$/.test(limpio));
 }
 
 async function handlerChat(env, request) {
@@ -439,9 +452,10 @@ async function handlerChat(env, request) {
         sintesis = await ejecutarGroqContabilizado(env, db, usuario, {
             modelo,
             mensajes: [{ role: 'user', content: construirPromptSintesis(mensaje, solicitud, busqueda.resultados) }],
-            // La instrucción pide ≤160 palabras; 320 tokens dejan margen para
-            // español y citas sin permitir una respuesta desproporcionada.
-            maxTokens: 320,
+            // La instrucción pide ≤160 palabras. GPT-OSS puede consumir parte
+            // del presupuesto razonando; 640 tokens con esfuerzo bajo dejan
+            // margen para una respuesta terminada sin hacerla extensa.
+            maxTokens: 640,
             modo: MODO_GROQ.SINTESIS_BUSQUEDA,
         });
     } catch (err) {
@@ -458,7 +472,7 @@ async function handlerChat(env, request) {
         }
         throw err;
     }
-    if (!sintesis.texto.trim()) {
+    if (!sintesisUtil(sintesis.texto, sintesis.finishReason)) {
         return json({
             ok: true,
             respuesta: 'Encontré fuentes, pero no pude preparar la respuesta. Reintenta.',

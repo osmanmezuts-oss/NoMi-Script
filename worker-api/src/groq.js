@@ -71,6 +71,17 @@ export async function llamarGroq(env, { modelo, mensajes, max_tokens, modo = MOD
     // ya viniera una; el handler solo envía un mensaje de usuario).
     const mensajesCompletos = [{ role: 'system', content: sistemaParaModo(modo) }, ...(mensajes || [])];
     const cuerpo = { model: modelo, messages: mensajesCompletos, max_tokens, stream: false };
+    // GPT-OSS razona por defecto con esfuerzo medio. En el paso de decidir una
+    // herramienta y, sobre todo, en la síntesis breve, eso puede gastar el
+    // presupuesto de salida antes de escribir una respuesta completa. "low"
+    // conserva la decisión semántica y deja margen para el texto visible.
+    if (modo === MODO_GROQ.DECISION_BUSQUEDA
+        || modo === MODO_GROQ.BUSQUEDA_FORZADA
+        || modo === MODO_GROQ.SINTESIS_BUSQUEDA) {
+        cuerpo.reasoning_effort = 'low';
+        // Groq exige hidden o parsed al combinar razonamiento con tool calling.
+        cuerpo.reasoning_format = 'hidden';
+    }
     if (modo === MODO_GROQ.DECISION_BUSQUEDA || modo === MODO_GROQ.BUSQUEDA_FORZADA) {
         cuerpo.tools = HERRAMIENTAS_BUSQUEDA;
         cuerpo.tool_choice = modo === MODO_GROQ.BUSQUEDA_FORZADA
@@ -117,6 +128,9 @@ export async function llamarGroq(env, { modelo, mensajes, max_tokens, modo = MOD
         texto,
         mensaje,
         toolCalls,
+        finishReason: typeof (datos.choices && datos.choices[0] && datos.choices[0].finish_reason) === 'string'
+            ? datos.choices[0].finish_reason
+            : '',
         usage: { tokens: usage.total_tokens || 0, solicitudes: 1 },
     };
 }

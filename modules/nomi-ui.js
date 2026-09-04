@@ -288,7 +288,7 @@ function crearVentanaChat() {
             NoMiState.reintentarPregunta = '';
             NoMiState.reintentarBusquedaForzada = false;
             NoMiState.busquedaForzada = forzar;
-            return preguntar(p);
+            return preguntar(p, { reintento: true });
         }
         consultarUsoNoMi();
     };
@@ -380,7 +380,7 @@ function actualizarBotonAccionHud() {
                 NoMiState.reintentarPregunta = '';
                 NoMiState.reintentarBusquedaForzada = false;
                 NoMiState.busquedaForzada = forzar;
-                return preguntar(p);
+                return preguntar(p, { reintento: true });
             };
         } else if (NoMiState.estadoHud === 'sin_conexion' && !NoMiState.reintentarPregunta) {
             texto = 'Actualizar'; accion = () => consultarUsoNoMi();

@@ -317,7 +317,7 @@ function instalarFetchSemantico(config = {}) {
                 ? { content: definida.texto ?? null, tool_calls: definida.toolCalls }
                 : { content: definida.texto || '' };
             return new Response(JSON.stringify({
-                choices: [{ message }],
+                choices: [{ message, finish_reason: definida.finishReason || 'stop' }],
                 usage: { total_tokens: definida.total || 10, prompt_tokens: 5, completion_tokens: Math.max(0, (definida.total || 10) - 5) },
             }), { status: 200, headers: { 'content-type': 'application/json' } });
         }
@@ -375,7 +375,7 @@ test('decisión semántica: Groq busca y sintetiza con tema, recencia y fuentes 
     const estado = instalarFetchSemantico({
         groq: [
             { toolCalls: toolBusqueda({ consulta, tema: 'news', recencia: 'day' }), total: 30 },
-            { texto: 'La actividad económica regional tuvo dos novedades relevantes [1] [2].', total: 40 },
+            { texto: 'La actividad económica regional tuvo dos novedades relevantes [1] [2]', total: 40 },
         ],
         resultados: [
             { title: 'Economía cruceña', url: 'https://medio.bo/nota?utm_source=x#parte', content: 'Datos económicos recientes de Santa Cruz.', published_date: '2026-09-04' },
@@ -403,7 +403,10 @@ test('decisión semántica: Groq busca y sintetiza con tema, recencia y fuentes 
     assert.equal(estado.tavily[0].topic, 'news');
     assert.equal(estado.tavily[0].time_range, 'day');
     assert.ok(!estado.groq[1].tools, 'segunda llamada sin tools: no hay bucle infinito');
-    assert.equal(estado.groq[1].max_tokens, 320, 'síntesis acotada para evitar respuestas excesivas');
+    assert.equal(estado.groq[0].reasoning_effort, 'low', 'decisión web deja presupuesto para la herramienta');
+    assert.equal(estado.groq[0].reasoning_format, 'hidden', 'tool calling oculta razonamiento interno');
+    assert.equal(estado.groq[1].max_tokens, 640, 'síntesis con margen para una respuesta terminada');
+    assert.equal(estado.groq[1].reasoning_effort, 'low', 'síntesis breve evita agotar el presupuesto razonando');
     assert.match(estado.groq[1].messages[0].content, /máximo 160 palabras/i, 'la instrucción limita la extensión');
     assert.match(estado.groq[1].messages[1].content, /Datos económicos recientes/, 'la síntesis recibe evidencia saneada');
 
@@ -427,7 +430,7 @@ test('síntesis con texto Unicode permanece dentro del presupuesto Groq', async 
     const estado = instalarFetchSemantico({
         groq: [
             { toolCalls: toolBusqueda({ consulta }), total: 15 },
-            { texto: 'Síntesis Unicode [1].', total: 16 },
+            { texto: 'Síntesis Unicode verificada con evidencia [1].', total: 16 },
         ],
         resultados: [0, 1, 2].map(i => ({
             title: '😀'.repeat(45),
@@ -556,4 +559,29 @@ test('fallo de síntesis Groq mantiene acotado el uso Tavily y contabiliza los d
     assert.equal(uso.tokens, 19, 'solo se cobran tokens reales devueltos por Groq');
     assert.equal(uso.solicitudes, 2, 'ambos intentos al proveedor cuentan como solicitudes');
     assert.equal(await db.contarConsultasBusqueda(usuario.id, diaActual()), 1, 'Tavily respondió: consume cupo y evita reintentos externos ilimitados');
+});
+
+test('síntesis truncada o fragmentaria no muestra enlaces sin respuesta y permite reintento', async () => {
+    for (const salida of [
+        { texto: '**Noticias de', finishReason: 'length' },
+        { texto: '**Noticias de', finishReason: 'stop' },
+    ]) {
+        const env = envNuevo();
+        const { token } = await crearInvitado(env);
+        const estado = instalarFetchSemantico({
+            groq: [
+                { toolCalls: toolBusqueda({ consulta: 'noticias Santa Cruz hoy', tema: 'news', recencia: 'day' }), total: 18 },
+                { ...salida, total: 20 },
+            ],
+        });
+        const r = await llamar(env, '/v1/chat', {
+            metodo: 'POST', token,
+            body: { modelo: 'openai/gpt-oss-20b', mensaje: '¿Qué noticias hay hoy en Santa Cruz?', permitirBusqueda: true },
+        });
+        const data = await r.json();
+        assert.equal(data.busquedaEstado, 'fallo_sintesis');
+        assert.match(data.respuesta, /no pude preparar la respuesta/i);
+        assert.equal(data.fuentes, undefined, 'un fragmento no se acompaña de enlaces como si fuera respuesta');
+        assert.equal(estado.groq.length, 2);
+    }
 });

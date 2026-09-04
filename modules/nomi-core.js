@@ -294,10 +294,11 @@ function esRespuestaComandoInseguro(texto) {
     return typeof texto === 'string' && /^\s*!search(\s|$)/i.test(texto);
 }
 
-async function preguntar(texto) {
+async function preguntar(texto, opciones = {}) {
     // La lupa aplica solo a este envío. Se consume incluso si clima gana o el
     // acceso falla, para que no se filtre accidentalmente a la pregunta siguiente.
     const forzarBusquedaSolicitada = NoMiState.busquedaForzada === true;
+    const esReintento = opciones.reintento === true;
     NoMiState.busquedaForzada = false;
     NoMiState.reintentarBusquedaForzada = false;
     if (NoMiState.modoAcceso === MODO_ACCESO_NOMI) {
@@ -370,6 +371,21 @@ async function preguntar(texto) {
         NoMiState.isWaiting = false;
         actualizarHud();
         return;
+    }
+
+    // Un reintento del HUD sustituye el turno temporal fallido, no lo duplica.
+    // En cambio, si la persona hace otra pregunta (por ejemplo, “¿por qué?”),
+    // el turno fallido se conserva en historial para que NoMi tenga contexto.
+    if (esReintento) {
+        const ultimo = NoMiState.historial[NoMiState.historial.length - 1];
+        const anterior = NoMiState.historial[NoMiState.historial.length - 2];
+        if (ultimo && anterior
+            && ultimo.role === 'assistant'
+            && anterior.role === 'user'
+            && anterior.content === texto) {
+            NoMiState.historial.splice(-2, 2);
+            guardarHistorial(NoMiState.historial);
+        }
     }
 
     const palabrasClave = ['analiza', 'examina', 'escanea', 'resume esta página'];
@@ -446,7 +462,9 @@ async function preguntar(texto) {
                 // posterior (Tavily sí consumió cupo). En ambos casos se conserva
                 // la pregunta para un reintento explícito y forzado.
                 ocultarCargando();
-                NoMiState.historial.pop();
+                // El error visible también forma parte de la conversación. Si
+                // se pregunta “¿por qué?”, debe poder referirse a este turno.
+                NoMiState.historial.push({ role: 'assistant', content: respuestaTexto });
                 guardarHistorial(NoMiState.historial);
                 const dispFallo = document.getElementById('nomi-modelo-display');
                 if (dispFallo) dispFallo.textContent = '⚠️ error';
