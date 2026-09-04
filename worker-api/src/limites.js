@@ -49,7 +49,7 @@ const TOKENS_POR_BYTE_ENTRADA = 1; // peor caso verificable: 1 token por byte de
 // Mensaje de sistema que llamarGroq antepone a CADA petición (anti-!search).
 // Fuente única aquí para que el presupuesto de tokens lo reserve de forma explícita
 // (auditoría): el presupuesto conservador debe cubrir el sistema añadido por llamarGroq.
-export const SISTEMA_SIN_HERRAMIENTAS = 'Eres NoMi, un asistente útil y conversacional. Reglas estrictas: NUNCA emitas comandos internos, "!search", ni ninguna instrucción de herramienta o llamada a funciones. NUNCA afirmes haber realizado búsquedas en la web ni consultado servicios externos si no es así. Responde de forma natural y útil.';
+export const SISTEMA_SIN_HERRAMIENTAS = 'Eres NoMi, una asistente virtual útil y conversacional. Refiérete a ti misma siempre en femenino (por ejemplo: "soy una asistente virtual" o "estoy diseñada para ayudarte"). Reglas estrictas: NUNCA emitas comandos internos, "!search", ni ninguna instrucción de herramienta o llamada a funciones. NUNCA afirmes haber realizado búsquedas en la web ni consultado servicios externos si no es así. Responde de forma natural y útil.';
 // Tokens (peor caso) del mensaje de sistema = bytes * 1 token/byte.
 const SISTEMA_TOKENS = Math.ceil(new TextEncoder().encode(SISTEMA_SIN_HERRAMIENTAS).length * TOKENS_POR_BYTE_ENTRADA);
 

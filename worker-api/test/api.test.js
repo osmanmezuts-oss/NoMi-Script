@@ -448,6 +448,15 @@ test('el presupuesto cubre el mensaje de sistema añadido por llamarGroq', async
     );
 });
 
+test('SISTEMA_SIN_HERRAMIENTAS presenta a NoMi como asistente virtual femenina', async () => {
+    const { SISTEMA_SIN_HERRAMIENTAS } = await import('../src/limites.js');
+    assert.ok(/una asistente virtual/.test(SISTEMA_SIN_HERRAMIENTAS), 'sistema del Worker: "una asistente virtual"');
+    assert.ok(/femenino/.test(SISTEMA_SIN_HERRAMIENTAS), 'sistema del Worker: instrucción de género femenino');
+    assert.ok(/dise[ñn]ada/.test(SISTEMA_SIN_HERRAMIENTAS), 'sistema del Worker: "diseñada"');
+    assert.ok(!/un asistente/.test(SISTEMA_SIN_HERRAMIENTAS), 'sistema del Worker: sin masculino genérico');
+    assert.ok(/NUNCA emitas comandos internos/.test(SISTEMA_SIN_HERRAMIENTAS), 'sistema del Worker: reglas anti-!search intactas');
+});
+
 // ---- Límite global de invitados: no se activa el usuario número 11 ----
 test('MAX_INVITADOS: no se crea ni activa el invitado 11', async () => {
     const env = envNuevo();

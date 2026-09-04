@@ -1,24 +1,3 @@
-/*
- * NoMi Asistente - Tampermonkey Script
- * 
- * Copyright 2026 Gartos
- * 
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-// ARCHIVO GENERADO AUTOMATICAMENTE POR tools/build-userscript.py — NO EDITAR MANUALMENTE.
-// Para cambiar el contenido, edita modules/ o build/ y regenera con el script.
-
 // ==UserScript==
 // @name         NoMi Asistente V5.8
 // @namespace    http://tampermonkey.net/
@@ -37,6 +16,27 @@
 // @updateURL    https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/main/NoMi%20Asistente%20V5.8.user.js
 // @downloadURL  https://raw.githubusercontent.com/osmanmezuts-oss/NoMi-Script/main/NoMi%20Asistente%20V5.8.user.js
 // ==/UserScript==
+
+// ARCHIVO GENERADO AUTOMATICAMENTE POR tools/build-userscript.py — NO EDITAR MANUALMENTE.
+// Para cambiar el contenido, edita modules/ o build/ y regenera con el script.
+
+/*
+ * NoMi Asistente - Tampermonkey Script
+ *
+ * Copyright 2026 Gartos
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 // ======== MODULO: nomi-config-estatica.js (bundle) ========
 // ======== MÓDULO: Configuración Estática ========
@@ -134,7 +134,7 @@ function construirHeadersPersonal(apiKey, urlBase) {
     }
     return headers;
 }
-const NOMI_PERSONA_SISTEMA = 'Eres NoMi, un asistente profesional y formal pero cercano. Responde con claridad, respeto y precisión. Evita el tuteo excesivo y mantén un tono de colaboración entre iguales. El usuario espera respuestas útiles, concisas y bien estructuradas.';
+const NOMI_PERSONA_SISTEMA = 'Eres NoMi, una asistente virtual profesional, formal y cercana. Responde con claridad, respeto y precisión. Evita el tuteo excesivo y mantén un tono de colaboración entre iguales. Estás diseñada para ofrecer respuestas útiles, concisas y bien estructuradas. Refiérete a ti misma siempre en femenino (por ejemplo: "soy una asistente virtual", "estoy diseñada").';
 
 const STORAGE_MODO_ACCESO = 'nomi_modo_acceso';
 const STORAGE_NOMI_WORKER_URL = 'nomi_worker_url';
@@ -1481,6 +1481,46 @@ function mapearErrorActivacion(err) {
     return (err && err.message) ? err.message : 'No se pudo activar el acceso NoMi.';
 }
 
+// Recupera el acceso PROPIETARIO permanente con su clave de recuperación.
+// Llamada a /v1/recuperar-propietario. Si no existe propietario, lo crea; si ya
+// existe, rota su token (el anterior queda inválido). La clave NO se consume ni
+// se persiste en el navegador: SOLO se guarda el token opaco devuelto.
+async function recuperarAccesoPropietario(clave) {
+    resetearUrlWorkerNoMi();
+    const base = nomiWorkerBase();
+    let datos;
+    try {
+        datos = await hacerPeticion(base + '/v1/recuperar-propietario', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ clave: String(clave || '').trim() })
+        });
+    } catch (err) {
+        throw new Error(mapearErrorRecuperacionPropietario(err));
+    }
+    if (!datos || !datos.token) {
+        throw new Error('El servidor NoMi no devolvió un token de instalación.');
+    }
+    // NUNCA se persiste la clave; solo el token opaco de instalación.
+    setNomiWorkerUrl(NOMI_WORKER_URL_POR_DEFECTO);
+    setNomiToken(datos.token);
+    setNomiAccesoActivo(true);
+    try {
+        const cat = await obtenerCatalogoNoMi();
+        const m = (cat && cat.modelos || []).find(x => x && x.proveedor === 'groq' && x.estado === 'activo');
+        if (m && m.id) setNomiModelo(m.id);
+    } catch (_) { /* el catálogo es opcional para la recuperación */ }
+    return datos.token;
+}
+
+// Convierte errores HTTP de recuperación propietaria en mensajes claros.
+function mapearErrorRecuperacionPropietario(err) {
+    const status = err && typeof err.status === 'number' ? err.status : null;
+    if (status === 400) return 'La clave propietaria es inválida o ya no está activa.';
+    if (status === 401) return 'No autorizado por el servidor NoMi.';
+    return (err && err.message) ? err.message : 'No se pudo recuperar el acceso propietario NoMi.';
+}
+
 // Obtiene el catálogo PÚBLICO de modelos del Worker (sin Authorization).
 async function obtenerCatalogoNoMi() {
     const base = nomiWorkerBase();
@@ -2671,10 +2711,43 @@ function mostrarAsistenteConfiguracion() {
     asistente.appendChild(cabecera);
 
     const scroll = nomiCrearNodo('div', { css: 'flex:1;overflow-y:auto;padding:8px 0;' });
-    const cajaCreds = nomiCrearNodo('div', { css: 'background:#0d0d1a;border-radius:12px;padding:16px;margin-bottom:16px;' });
-    cajaCreds.appendChild(nomiCrearNodo('h3', { css: 'color:#4a6cf7;margin:0 0 12px 0;font-size:15px;', texto: '🔑 Configuración de credenciales' }));
-    cajaCreds.appendChild(nomiCrearNodo('p', { css: 'color:#888;font-size:12px;margin-bottom:16px;', texto: `Para usar ${NOMBRE_ASISTENTE}, necesitas configurar tus claves de API. Puedes importarlas desde un archivo .enc (si tienes uno) o ingresarlas manualmente.` }));
-    cajaCreds.appendChild(nomiCrearNodo('button', { id: 'nomi-config-importar', css: 'width:100%;padding:12px;background:#4a6cf7;border:none;border-radius:10px;color:#fff;font-size:14px;cursor:pointer;margin-bottom:12px;', texto: '📥 Importar desde archivo .enc' }));
+
+    // ---- Acceso NoMi (principal en instalación limpia) ----
+    // Primera sección visible: activar con código de invitación normal o recuperar
+    // el acceso propietario permanente con su clave. NO exige credenciales de API
+    // Personal/.enc ni cerrar el asistente para activar NoMi. La clave propietaria
+    // se envía una vez al Worker y NUNCA se persiste en el navegador (solo el token).
+    const secNoMi = nomiCrearNodo('div', { id: 'nomi-config-seccion-nomi', css: 'background:#0d0d1a;border-radius:12px;padding:16px;margin-bottom:16px;border:1px solid #b06bff;' });
+    secNoMi.appendChild(nomiCrearNodo('h3', { css: 'color:#b06bff;margin:0 0 12px 0;font-size:15px;', texto: '🔑 Acceso NoMi' }));
+    const estadoNoMi = nomiCrearNodo('span', { id: 'nomi-config-estado-nomi', css: 'font-size:11px;color:#888;' });
+    secNoMi.appendChild(estadoNoMi);
+
+    const filaCodigoConf = nomiCrearNodo('div', { css: 'margin-bottom:8px;' });
+    filaCodigoConf.appendChild(nomiCrearNodo('label', { css: 'font-size:11px;color:#888;display:block;margin-bottom:2px;', texto: 'Código de invitación' }));
+    filaCodigoConf.appendChild(nomiCrearNodo('input', { id: 'nomi-config-codigo', atributos: { type: 'text', placeholder: 'Código de invitación' }, css: 'width:100%;padding:8px;border-radius:8px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;' }));
+    filaCodigoConf.appendChild(nomiCrearNodo('button', { id: 'nomi-config-activar', css: 'width:100%;padding:10px;background:#b06bff;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;margin-top:6px;', texto: '🔑 Activar con código de invitación' }));
+    secNoMi.appendChild(filaCodigoConf);
+
+    const filaClave = nomiCrearNodo('div', { css: 'border-top:1px solid #333;padding-top:10px;margin-top:10px;' });
+    filaClave.appendChild(nomiCrearNodo('label', { css: 'font-size:11px;color:#888;display:block;margin-bottom:2px;', texto: 'Clave propietaria (recuperar acceso permanente)' }));
+    filaClave.appendChild(nomiCrearNodo('input', { id: 'nomi-config-clave-propietario', atributos: { type: 'password', placeholder: 'nomi-pro-…' }, css: 'width:100%;padding:8px;border-radius:8px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;' }));
+    filaClave.appendChild(nomiCrearNodo('button', { id: 'nomi-config-recuperar-propietario', css: 'width:100%;padding:10px;background:#b06bff;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;margin-top:6px;', texto: '🔑 Recuperar acceso propietario' }));
+    filaClave.appendChild(nomiCrearNodo('div', { css: 'font-size:10px;color:#888;margin-top:6px;', texto: 'La clave no se guarda en este navegador: solo se guarda el token opaco que devuelve el servidor.' }));
+    secNoMi.appendChild(filaClave);
+    scroll.appendChild(secNoMi);
+
+        // Caja de credenciales (API Personal / .enc): COLAPSADA por defecto en instalación
+    // limpia, con toggle explícito. Se conserva el contenido completo; solo se oculta
+    // visualmente hasta que el usuario la abra.
+    const cajaCredsWrapper = nomiCrearNodo('div', { css: 'background:#0d0d1a;border-radius:12px;margin-bottom:16px;' });
+    const cajaCreds = nomiCrearNodo('div', { css: 'padding:0 16px;' });
+    const cajaCredsContenido = nomiCrearNodo('div', { id: 'nomi-config-credenciales-contenido', css: 'display:none;' });
+    const filaEncabezadoCreds = nomiCrearNodo('div', { css: 'display:flex;align-items:center;justify-content:space-between;padding:12px 12px 12px 12px;border-bottom:1px solid #333;' });
+    filaEncabezadoCreds.appendChild(nomiCrearNodo('h3', { css: 'color:#4a6cf7;margin:0;font-size:15px;', texto: '🔑 Configuración de credenciales' }));
+    filaEncabezadoCreds.appendChild(nomiCrearNodo('button', { id: 'nomi-config-toggle-credenciales', atributos: { title: 'Mostrar/ocultar credenciales' }, css: 'background:#333;border:none;border-radius:6px;color:#fff;font-size:12px;padding:4px 10px;cursor:pointer;', texto: '▸' }));
+    cajaCreds.appendChild(filaEncabezadoCreds);
+    cajaCredsContenido.appendChild(nomiCrearNodo('p', { css: 'color:#888;font-size:12px;margin-bottom:16px;', texto: `Para usar ${NOMBRE_ASISTENTE}, necesitas configurar tus claves de API. Puedes importarlas desde un archivo .enc (si tienes uno) o ingresarlas manualmente.` }));
+    cajaCredsContenido.appendChild(nomiCrearNodo('button', { id: 'nomi-config-importar', css: 'width:100%;padding:12px;background:#4a6cf7;border:none;border-radius:10px;color:#fff;font-size:14px;cursor:pointer;margin-bottom:12px;', texto: '📥 Importar desde archivo .enc' }));
     const subCaja = nomiCrearNodo('div', { css: 'border-top:1px solid #333;padding-top:12px;margin-top:8px;' });
     subCaja.appendChild(nomiCrearNodo('p', { css: 'color:#888;font-size:12px;margin-bottom:8px;', texto: '✏️ O ingresa tus claves manualmente:' }));
 
@@ -2707,9 +2780,11 @@ function mostrarAsistenteConfiguracion() {
     filaUrl.appendChild(nomiCrearNodo('label', { css: 'font-size:11px;color:#888;display:block;margin-bottom:2px;', texto: 'URL Base (opcional)' }));
     filaUrl.appendChild(nomiCrearNodo('input', { id: 'nomi-config-url', atributos: { type: 'text', placeholder: URL_BASE_POR_DEFECTO }, css: 'width:100%;padding:8px;border-radius:8px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:12px;' }));
     subCaja.appendChild(filaUrl);
-    subCaja.appendChild(nomiCrearNodo('button', { id: 'nomi-config-guardar', css: 'width:100%;padding:10px;background:#34a853;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;', texto: '💾 Guardar credenciales' }));
-    cajaCreds.appendChild(subCaja);
-    scroll.appendChild(cajaCreds);
+        subCaja.appendChild(nomiCrearNodo('button', { id: 'nomi-config-guardar', css: 'width:100%;padding:10px;background:#34a853;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer;', texto: '💾 Guardar credenciales' }));
+    cajaCredsContenido.appendChild(subCaja);
+    cajaCreds.appendChild(cajaCredsContenido);
+    cajaCredsWrapper.appendChild(cajaCreds);
+    scroll.appendChild(cajaCredsWrapper);
 
     const cajaInfo = nomiCrearNodo('div', { css: 'background:#0d0d1a;border-radius:12px;padding:12px;border:1px solid #333;' });
     const pInfo = nomiCrearNodo('p', { css: 'color:#555;font-size:10px;margin:0;text-align:center;' });
@@ -2728,6 +2803,88 @@ function mostrarAsistenteConfiguracion() {
     void cargarModelosAsistente(false);
 
     document.getElementById('nomi-config-importar').onclick = () => importarCredenciales();
+    // ---- Acceso NoMi: activar con código de invitación o recuperar propietario ----
+    // La sección "Acceso NoMi" (nomi-config-seccion-nomi) es la primera vista en
+    // instalación limpia: activa con un código de invitación o recupera el acceso
+    // propietario permanente con su clave, SIN necesidad de .enc ni ir a ⚙️.
+    // En ambos casos: establece el modo NoMi, actualiza estado/HUD, cierra el
+    // asistente, limpia los inputs (incluida la clave) y nunca persiste la clave.
+    const finalizarOnboardingNoMi = () => {
+        // Estado NoMi activo y HUD sincronizado.
+        setModoAcceso(MODO_ACCESO_NOMI);
+        NoMiState.modoAcceso = MODO_ACCESO_NOMI;
+        if (typeof actualizarHud === 'function') actualizarHud();
+        if (typeof actualizarIndicador === 'function') actualizarIndicador();
+        // Cierra el asistente de configuración y abre la ventana de chat.
+        const asistente = document.getElementById('nomi-asistente-config');
+        if (asistente) asistente.remove();
+        if (!NoMiState.ventanaAbierta) toggleVentana(true);
+        // Limpieza de inputs (la clave nunca se persiste).
+        const claveInput = document.getElementById('nomi-config-clave-propietario');
+        if (claveInput) claveInput.value = '';
+        const codigoInput = document.getElementById('nomi-config-codigo');
+        if (codigoInput) codigoInput.value = '';
+    };
+    const btnActivar = document.getElementById('nomi-config-activar');
+    if (btnActivar) btnActivar.onclick = async () => {
+        const inputCodigo = document.getElementById('nomi-config-codigo');
+        const codigo = (inputCodigo ? inputCodigo.value.trim() : '');
+        if (!codigo) {
+            mostrarNotificacionTemporal('Introduce un código de invitación.');
+            return;
+        }
+        btnActivar.disabled = true;
+        const estadoNoMi = document.getElementById('nomi-config-estado-nomi');
+        if (estadoNoMi) estadoNoMi.textContent = 'Activando…';
+        try {
+            await activarAccesoNoMi(codigo);
+            finalizarOnboardingNoMi();
+            mostrarNotificacionTemporal('✅ Acceso compartido NoMi activado.');
+        } catch (err) {
+            mostrarNotificacionTemporal(err && err.message ? err.message : 'Error al activar el acceso NoMi.');
+        } finally {
+            btnActivar.disabled = false;
+            if (estadoNoMi) estadoNoMi.textContent = '';
+            // Limpieza final de inputs (incluida la clave, que nunca se persiste).
+            if (inputCodigo) inputCodigo.value = '';
+        }
+    };
+    const btnRecuperar = document.getElementById('nomi-config-recuperar-propietario');
+    if (btnRecuperar) btnRecuperar.onclick = async () => {
+        const inputClave = document.getElementById('nomi-config-clave-propietario');
+        const clave = (inputClave ? inputClave.value.trim() : '');
+        if (!clave) {
+            mostrarNotificacionTemporal('Introduce la clave propietaria.');
+            return;
+        }
+        btnRecuperar.disabled = true;
+        const estadoNoMi = document.getElementById('nomi-config-estado-nomi');
+        if (estadoNoMi) estadoNoMi.textContent = 'Recuperando…';
+        try {
+            await recuperarAccesoPropietario(clave);
+            finalizarOnboardingNoMi();
+            mostrarNotificacionTemporal('✅ Acceso propietario recuperado.');
+        } catch (err) {
+            mostrarNotificacionTemporal(err && err.message ? err.message : 'Error al recuperar el acceso propietario.');
+        } finally {
+            btnRecuperar.disabled = false;
+            if (estadoNoMi) estadoNoMi.textContent = '';
+            // La clave nunca se persiste: siempre se limpia al terminar.
+            if (inputClave) inputClave.value = '';
+        }
+    };
+    // Toggle explícito: API Personal/.enc colapsado por defecto, como sección avanzada.
+    const toggleCreds = document.getElementById('nomi-config-toggle-credenciales');
+    if (toggleCreds) {
+        const icono = toggleCreds;
+        toggleCreds.onclick = () => {
+            const cont = document.getElementById('nomi-config-credenciales-contenido');
+            if (!cont) return;
+            const abierto = cont.style.display !== 'none';
+            cont.style.display = abierto ? 'none' : 'block';
+            icono.textContent = abierto ? '▸' : '▾';
+        };
+    }
     // "Actualizar modelos": si la URL es OpenRouter, consulta el catálogo; si no,
     // muestra el campo manual. Se reevalúa al cambiar la URL base.
     const evaluarUrlAsistente = () => {
@@ -3606,11 +3763,11 @@ function iniciarAsistente() {
     const mostrarConfig = debeMostrarConfiguracionInicial();
 
     if (NoMiState.historial.length === 0) {
-        const sistema = `Eres NoMi, un asistente profesional y formal pero cercano. Responde con claridad, respeto y precisión. Evita el tuteo excesivo y mantén un tono de colaboración entre iguales. El usuario espera respuestas útiles, concisas y bien estructuradas.\n\n**Si el usuario pregunta sobre su ubicación (ej: "¿dónde estoy?", "¿en qué ciudad estoy?"), usa los datos de ubicación que tienes en el contexto.** No digas que no tienes acceso a la ubicación.`;
+        const sistema = `Eres NoMi, una asistente virtual profesional, formal y cercana. Responde con claridad, respeto y precisión. Evita el tuteo excesivo y mantén un tono de colaboración entre iguales. Estás diseñada para ofrecer respuestas útiles, concisas y bien estructuradas. Refiérete a ti misma siempre en femenino (por ejemplo: "soy una asistente virtual", "estoy diseñada").\n\n**Si el usuario pregunta sobre su ubicación (ej: "¿dónde estoy?", "¿en qué ciudad estoy?"), usa los datos de ubicación que tienes en el contexto.** No digas que no tienes acceso a la ubicación.`;
         NoMiState.historial.unshift({ role: 'system', content: sistema });
         guardarHistorial(NoMiState.historial);
 
-        let bienvenida = `Hola, soy **${NOMBRE_ASISTENTE}**, su asistente de navegación.\nPara ver la lista de comandos disponibles, escriba \`!cmd\`.\n`;
+        let bienvenida = `Hola, soy **${NOMBRE_ASISTENTE}**, su asistente virtual. Estoy diseñada para acompañarle y responderle con claridad y respeto.\nPara ver la lista de comandos disponibles, escriba \`!cmd\`.\n`;
         if (mostrarConfig) bienvenida += `\n⚠️ **Es necesario configurar tus credenciales.**\nSe abrirá un asistente de configuración para que importes o ingreses tus claves de API.\n`;
         else if (NoMiState.modoAcceso === MODO_ACCESO_NOMI && NoMiState.nomiToken && NoMiState.nomiAccesoActivo) bienvenida += `\n🌐 Acceso compartido NoMi activo. Puedes chatear directamente.\n`;
         else if (!NoMiState.credencialesCargadas) bienvenida += `\n⚠️ **Aún no has configurado tus credenciales.** Ve al menú (⚙️) y selecciona "Importar credenciales" o ingresa tus claves manualmente para activar la búsqueda web y el acceso a la IA.\n`;
@@ -3660,6 +3817,19 @@ function limpiarSufijosTemporalesCiudad(ciudad) {
     return partes.join(' ').trim();
 }
 
+// Normaliza la ubicación detectada eliminando SOLO comillas, apóstrofes o
+// puntuación EXTERNOS (inicio/final). Conserva apóstrofes internos legítimos
+// (p. ej. "Sant'Agata") y no toca el interior de la cadena: evita que una comilla
+// o apóstrofo de cierre pegado por el usuario (p. ej. "Santa Cruz de la Sierra'")
+// llegue a Open-Meteo y rompa la resolución del geocoding.
+function normalizarUbicacionClima(ubicacion) {
+    let s = String(ubicacion || '').trim();
+    s = s.replace(/^[\s"'“”‘’]+/, '').replace(/[\s"'“”‘’]+$/, '');
+    s = s.replace(/^[¿¡…]+/, '');
+    s = s.replace(/[?!.,;:…]+$/, '');
+    return s.trim();
+}
+
 // Detección conservadora de consultas meteorológicas en modo NoMi. Devuelve la
 // ubicación a consultar o null (entonces el chat sigue normal).
 // - Palabras fuertes: clima, pronóstico/pronostico, temperatura, lluvia, viento.
@@ -3684,16 +3854,17 @@ function detectarClimaNoMi(texto) {
         /\btiempo\s+(hoy|mañana|manana|ahora)\b/i.test(t)
     );
     if (!climaFuerte && !climaPorTiempo) return null;
-    // a) Ciudad identificable tras "en …" (eliminando sufijos temporales).
+    // a) Ciudad identificable tras "en …" (normalizando extremos y eliminando
+    // sufijos temporales).
     const m = t.match(/\ben\s+([^?.,!¿¡]+)/i);
     if (m && m[1].trim().length >= 3) {
-        const ciudad = limpiarSufijosTemporalesCiudad(m[1].trim());
+        const ciudad = limpiarSufijosTemporalesCiudad(normalizarUbicacionClima(m[1]));
         if (ciudad.length >= 3) return ciudad;
     }
     // b) Ubicación local explícitamente habilitada.
     if (NoMiState.ubicacionActivada && NoMiState.ubicacionActual && NoMiState.ubicacionActual.ciudad) {
         const u = NoMiState.ubicacionActual;
-        return (u.ciudad + (u.pais ? ', ' + u.pais : '')).trim();
+        return (normalizarUbicacionClima(u.ciudad) + (u.pais ? ', ' + u.pais : '')).trim();
     }
     return null;
 }
@@ -3701,10 +3872,12 @@ function detectarClimaNoMi(texto) {
 // Detecta solicitudes de búsqueda web en modo NoMi (Tavily SOLO vía Worker).
 // Devuelve la consulta a buscar o null (el chat sigue su flujo normal).
 // - Comandos explícitos ("busca X", "investiga X"): SIEMPRE activan, sin exigir !search.
-// - Auto-detección SOLO de intención temporal inequívoca: patrones COMPUESTOS
-//   (evento/noticia + recencia). Palabras genéricas aisladas ("noticias",
-//   "precio", "resultados") NO activan nada por sí solas para evitar falsos
-//   positivos. El clima tiene prioridad y se evalúa antes en preguntar().
+// - Auto-detección: intención informativa inequívoca con marcador de recencia en
+//   el MISMO texto (aunque haya palabras intermedias entre ambos) o los patrones
+//   compuestos existentes. Palabras genéricas aisladas ("noticias", "precio",
+//   "eventos") NO activan nada por sí solas para evitar falsos positivos; la
+//   recencia explícita (hoy, actual, últimas, esta semana, recientemente…) es
+//   imprescindible. El clima tiene prioridad y se evalúa antes en preguntar().
 function detectarBusquedaNoMi(texto) {
     if (typeof texto !== 'string' || !texto.trim()) return null;
     const t = texto.trim();
@@ -3723,6 +3896,26 @@ function detectarBusquedaNoMi(texto) {
     ];
     for (const re of patronesTemporales) {
         if (re.test(t)) return t;
+    }
+    // Intención informativa + marcador de recencia en el mismo texto, aunque haya
+    // palabras intermedias (p. ej. "dime las noticias destacadas de Bolivia hoy").
+    // Los bordes usan clases EXTERNAS a \b porque en JS los acentos/ñ NO son \w
+    // (\b fallaría pegado a "ú", "ó", "ñ"); así "últimas" o "ganó" se reconocen.
+    // Palabras aisladas sin recencia (p. ej. "me gustan las noticias antiguas",
+    // "historia de Bolivia") quedan bloqueadas.
+    const inicioPalabra = '(?:^|[\\s¿¡(“"])';
+    const finPalabra = '(?=$|[\\s?.,!;:)”…])';
+    const intencionInformativa = new RegExp(
+        inicioPalabra + '(?:noticias?|titulares?|actualidad|novedades?|precios?|cotizaci[oó]n|resultados?|eventos?)' + finPalabra,
+        'i'
+    );
+    const marcadorRecencia = new RegExp(
+        inicioPalabra + '(?:hoy|actual(?:es)?|[uú]ltim[ao]s?|recientemente|ayer|anoche|esta\\s+semana|este\\s+fin\\s+de\\s+semana)' + finPalabra,
+        'i'
+    );
+    const recenciaPosPreposicion = /(?:de\s+hoy|del\s+d[ií]a)(?=$|[\s?.,!;:])/i;
+    if (intencionInformativa.test(t) && (marcadorRecencia.test(t) || recenciaPosPreposicion.test(t))) {
+        return t;
     }
     return null;
 }

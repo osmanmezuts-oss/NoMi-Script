@@ -22,7 +22,19 @@ function makeEl(tag) {
         className: '',
         children: [],
         parentNode: null,
-        style: {},
+                style: (() => {
+            // Mock de CSSStyleDeclaration: cssText parsea `display` y props comunes.
+            const st = { display: '', cssText: '' };
+            Object.defineProperty(st, 'cssText', {
+                get() { return st._cssText || ''; },
+                set(v) {
+                    st._cssText = v;
+                    const m = (v || '').match(/\bdisplay\s*:\s*([^;]+)/);
+                    st.display = m ? m[1].trim() : '';
+                },
+            });
+            return st;
+        })(),
         attributes: {},
         _text: '',
         value: '',
@@ -152,6 +164,17 @@ ctx.getNomiModelo = () => 'openai/gpt-oss-20b';
 ctx.getNomiToken = () => 'TOK';
 // Setters / acciones (no-ops)
 ['setModoAcceso','setModelo','setMotorBusqueda','setDiagnosticoActivo','setModoLigero','setModoResumen','setBusquedaWeb','setContexto','setUbicacionActivada','setTamanoVentana','setValidado','actualizarBarraUbicacion','actualizarIndicador','mostrarEstadisticas','mostrarExportacion','mostrarMenu','importarCredenciales','guardarCredencialesManual','cargarModelosAlMenu','cargarModelosNoMiAlMenu','cargarModelosAsistente','activarAccesoNoMi','cerrarAccesoNoMi','limpiarHistorialesAntiguos','exportarLogs','exportarChat','actualizarUbicacion','limpiarAvisoModelo'].forEach((n) => { ctx[n] = () => {}; });
+
+// Stubs fieles para onboarding: reflejan estado en NoMiState y persistencia simulada.
+ctx.setNomiToken = (t) => { NoMiState.nomiToken = t; GM_setValue(STORAGE_NOMI_TOKEN, t); };
+ctx.setNomiAccesoActivo = (v) => { NoMiState.nomiAccesoActivo = !!v; GM_setValue(STORAGE_NOMI_ACCESO_ACTIVO, !!v); };
+ctx.setNomiModelo = (m) => { NoMiState.nomiModelo = m; GM_setValue(STORAGE_NOMI_MODELO, m); };
+ctx.mostrarNotificacionTemporal = (m) => { NoMiState.__ultimaNotificacion = m; };
+ctx.toggleVentana = (mostrar) => { NoMiState.ventanaAbierta = !!mostrar; };
+ctx.cargarHistorial = () => {};
+ctx.guardarHistorial = () => {};
+ctx.actualizarStats = () => {};
+ctx.agregarMensaje = () => {};
 ctx.fetchFreeModelos = async () => [];
 ctx.obtenerCatalogoNoMi = async () => ({ modelos: [] });
 vm.createContext(ctx);
@@ -182,6 +205,15 @@ const pruebas = `
     // setModoAcceso fiel: persiste en el almacenamiento simulado (GM_*),
     // de modo que getModoAcceso() refleje el cambio tras click del CTA.
     setModoAcceso = (m) => { NoMiState.modoAcceso = m; GM_setValue(STORAGE_MODO_ACCESO, m); };
+
+    // Los stubs "fieles" asignados a ctx antes de cargar los módulos son
+    // sobrescritos por las declaraciones function de nomi-chat.js/nomi-persistencia.js
+    // al ejecutarse con vm.runInContext. Se reaplican aquí (tras la carga) para que
+    // los tests de onboarding lean estado en NoMiState: el toggleVentana real no
+    // abre nada sin #nomi-chat (ausente en estas pruebas aisladas) y el real de
+    // notificaciones no registra __ultimaNotificacion.
+    toggleVentana = (mostrar) => { NoMiState.ventanaAbierta = !!mostrar; };
+    mostrarNotificacionTemporal = (m) => { NoMiState.__ultimaNotificacion = m; };
 
     // 1) crearVentanaChat construye la ventana con todos los IDs requeridos.
     limpiarBody();
@@ -538,7 +570,106 @@ const pruebas = `
     chkBusqNomi.onchange({ target: chkBusqNomi });
     assert.strictEqual(getBusquedaWebNomi(), true, 'reactivar persiste búsqueda web NoMi = true');
 
-    console.log('OK: todas las pruebas de UI (DOM simulado, sin innerHTML) pasaron');
+    // ---- Pruebas de onboarding (click/onboarding) ----
+    // 10a) En instalación limpia: API Personal (.enc) está COLAPSADA por defecto
+    //      en el asistente de configuración (solo "Acceso NoMi" visible).
+    limpiarBody();
+    NoMiState.modoAcceso = MODO_ACCESO_OPENROUTER;
+    NoMiState.credencialesCargadas = false;
+    NoMiState.nomiToken = ''; NoMiState.nomiAccesoActivo = false;
+    NoMiState.ventanaAbierta = false;
+    mostrarAsistenteConfiguracion();
+    assert.ok(document.getElementById('nomi-config-seccion-nomi'), 'asistente: sección Acceso NoMi presente');
+    assert.ok(document.getElementById('nomi-config-activar'), 'asistente: #nomi-config-activar presente');
+    assert.ok(document.getElementById('nomi-config-recuperar-propietario'), 'asistente: #nomi-config-recuperar-propietario presente');
+    assert.ok(document.getElementById('nomi-config-clave-propietario'), 'asistente: input de clave propietaria presente');
+    const contCreds = document.getElementById('nomi-config-credenciales-contenido');
+    assert.ok(contCreds, 'asistente: contenedor de credenciales visible como toggle');
+    assert.strictEqual(contCreds.style.display, 'none', 'asistente: API Personal (.enc) COLAPSADA por defecto');
+
+    // 10b) Toggle colapsa/expande la caja de credenciales (API Personal avanzada).
+    const toggleCreds = document.getElementById('nomi-config-toggle-credenciales');
+    assert.ok(toggleCreds, 'asistente: toggle de credenciales presente');
+    assert.strictEqual(toggleCreds.textContent, '▸', 'asistente: toggle ícono colapsado ▸');
+    toggleCreds.onclick();
+    assert.strictEqual(contCreds.style.display, 'block', 'asistente: toggle expande API Personal');
+    assert.strictEqual(toggleCreds.textContent, '▾', 'asistente: toggle ícono ▾ al expandir');
+    toggleCreds.onclick();
+    assert.strictEqual(contCreds.style.display, 'none', 'asistente: toggle colapsa API Personal');
+        assert.strictEqual(toggleCreds.textContent, '▸', 'asistente: toggle ícono ▸ al colapsar');
+
+    // 10c) Click "Activar con código de invitación": deshabilita el botón, establece
+    //      modo NoMi, actualiza HUD, cierra el asistente, limpia el input y no persiste
+    //      la clave (no hay clave aquí, pero el input de código se limpia).
+    limpiarBody();
+    NoMiState.ventanaAbierta = false;
+    mostrarAsistenteConfiguracion();
+    const inputCodigo = document.getElementById('nomi-config-codigo');
+    const btnActivar = document.getElementById('nomi-config-activar');
+    inputCodigo.value = 'ABCD';
+    activarAccesoNoMi = (codigo) => {
+        assert.strictEqual(codigo.toUpperCase(), 'ABCD', 'activar: envía código en mayúsculas');
+        setNomiToken('TOK_ACTIVAR');
+        setNomiAccesoActivo(true);
+        return Promise.resolve('TOK_ACTIVAR');
+    };
+    assert.strictEqual(btnActivar.disabled, false, 'asistente: botón activar habilitado antes del click');
+    btnActivar.onclick();
+    await new Promise(r => setTimeout(r, 50));
+    assert.strictEqual(NoMiState.modoAcceso, MODO_ACCESO_NOMI, 'activar: establece modo NoMi');
+    assert.strictEqual(getModoAcceso(), MODO_ACCESO_NOMI, 'activar: persiste modo NoMi');
+    assert.strictEqual(getNomiToken(), 'TOK_ACTIVAR', 'activar: guarda el token opaco');
+    assert.strictEqual(NoMiState.ventanaAbierta, true, 'activar: abre la ventana de chat (toggleVentana(true))');
+    assert.strictEqual(document.getElementById('nomi-asistente-config'), null, 'activar: cierra el asistente (modal removido)');
+    assert.strictEqual(inputCodigo.value, '', 'activar: limpia el input de código tras éxito');
+    assert.strictEqual(btnActivar.disabled, false, 'activar: restaura el botón tras completarse');
+
+    // 10d) Click "Recuperar acceso propietario": análogo y la CLAVE se limpia
+    //      de los inputs (nunca persistida).
+    limpiarBody();
+    NoMiState.ventanaAbierta = false;
+    NoMiState.nomiToken = ''; NoMiState.nomiAccesoActivo = false;
+    NoMiState.modoAcceso = MODO_ACCESO_OPENROUTER;
+    mostrarAsistenteConfiguracion();
+    const inputClave = document.getElementById('nomi-config-clave-propietario');
+    const btnRecuperar = document.getElementById('nomi-config-recuperar-propietario');
+    inputClave.value = 'nomi-pro-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
+    recuperarAccesoPropietario = (clave) => {
+        assert.ok(clave.startsWith('nomi-pro-'), 'recuperar: envía clave con prefijo nomi-pro-');
+        setNomiToken('TOK_PROP');
+        setNomiAccesoActivo(true);
+        return Promise.resolve('TOK_PROP');
+    };
+    assert.strictEqual(btnRecuperar.disabled, false, 'asistente: botón recuperar habilitado antes del click');
+    btnRecuperar.onclick();
+    await new Promise(r => setTimeout(r, 50));
+    assert.strictEqual(NoMiState.modoAcceso, MODO_ACCESO_NOMI, 'recuperar: establece modo NoMi');
+    assert.strictEqual(getNomiToken(), 'TOK_PROP', 'recuperar: guarda el token opaco');
+    assert.strictEqual(NoMiState.ventanaAbierta, true, 'recuperar: abre la ventana de chat');
+    assert.strictEqual(document.getElementById('nomi-asistente-config'), null, 'recuperar: cierra el asistente (modal removido)');
+    assert.strictEqual(inputClave.value, '', 'recuperar: LIMPIA la clave de los inputs (nunca persistida)');
+    assert.strictEqual(btnRecuperar.disabled, false, 'recuperar: restaura el botón tras completarse');
+    assert.ok(!String(GM_getValue(STORAGE_NOMI_TOKEN, '')).includes('nomi-pro-'), 'recuperar: la clave NO se persiste en storage');
+
+    // 10e) Mientras opera: botón deshabilitado; tras error se restaura y se muestra
+    //      mensaje de error humano.
+    limpiarBody();
+    NoMiState.ventanaAbierta = false;
+    NoMiState.nomiToken = ''; NoMiState.nomiAccesoActivo = false;
+    NoMiState.modoAcceso = MODO_ACCESO_OPENROUTER;
+    mostrarAsistenteConfiguracion();
+    const inputCod2 = document.getElementById('nomi-config-codigo');
+    const btnAct2 = document.getElementById('nomi-config-activar');
+    const estadoNoMi = document.getElementById('nomi-config-estado-nomi');
+    inputCod2.value = 'ZZZZ';
+    activarAccesoNoMi = () => Promise.reject(new Error('Código de invitación inválido o ya usado.'));
+    btnAct2.onclick();
+    await new Promise(r => setTimeout(r, 50));
+    assert.strictEqual(btnAct2.disabled, false, 'error: botón restaurado tras fallo');
+    assert.strictEqual(estadoNoMi.textContent, '', 'error: estado limpio tras fallo');
+    assert.ok(/inv.lido|usado|caducado/.test(NoMiState.__ultimaNotificacion), 'error: notificación humana visible');
+
+        console.log('OK: todas las pruebas de UI (DOM simulado, sin innerHTML) pasaron');
 })().catch((e) => { console.error('FALLO:', e && e.message); throw e; });
 `;
 

@@ -12,6 +12,7 @@ export function crearD1Stub() {
         liberaciones: [],
         uso_clima_diario: [],
         uso_busqueda_diario: [],
+        claves_propietario: [],
     };
 
     function runSql(sql, p) {
@@ -51,7 +52,49 @@ export function crearD1Stub() {
             fila.estado = 'canjeada'; fila.canjeada_en = canjeadaEn;
             return { meta: { changes: 1 } };
         }
+        if (/^INSERT INTO claves_propietario/.test(sql)) {
+            // binds: id, clave_hash, creada_en (estado literal 'activa')
+            const id = val(); const claveHash = val(); const creadaEn = val();
+            tablas.claves_propietario.push({ id, clave_hash: claveHash, estado: 'activa', creada_en: creadaEn, revocada_en: null });
+            return { meta: { changes: 1 } };
+        }
+        if (/^UPDATE claves_propietario SET estado='revocada', revocada_en = \?/.test(sql)) {
+            const revocadaEn = val();
+            const fila = tablas.claves_propietario.find(r => r.estado === 'activa');
+            if (fila) { fila.estado = 'revocada'; fila.revocada_en = revocadaEn; return { meta: { changes: 1 } }; }
+            return { meta: { changes: 0 } };
+        }
+        if (sql.includes("UPDATE usuarios SET estado = 'revocado' WHERE rol = 'propietario'")) {
+            const fila = tablas.usuarios.find(r => r.rol === 'propietario' && r.estado === 'activo');
+            if (fila) { fila.estado = 'revocado'; return { meta: { changes: 1 } }; }
+            return { meta: { changes: 0 } };
+        }
+        if (/^UPDATE usuarios SET token_hash = \?/.test(sql) && /WHERE rol='propietario'/.test(sql)) {
+            const tokenHash = val();
+            // La escritura endurecida incluye "AND EXISTS (SELECT 1 FROM claves_propietario
+            // WHERE clave_hash = ? AND estado = 'activa')"; el 2º bind es claveHash.
+            // El stub verifica que la clave sigue activa en ese momento (hardening de carrera):
+            // si fue revocada entre el SELECT y el UPDATE, la escritura afecta 0 filas.
+            const tieneClaveBind = /AND EXISTS \(SELECT 1 FROM claves_propietario/.test(sql);
+            if (tieneClaveBind) {
+                const claveHash = val();
+                const claveActiva = tablas.claves_propietario.find(r => r.clave_hash === claveHash && r.estado === 'activa');
+                if (!claveActiva) return { meta: { changes: 0 } }; // clave revocada/rotada entre SELECT y UPDATE
+            }
+            const fila = tablas.usuarios.find(r => r.rol === 'propietario' && r.estado === 'activo');
+            if (fila) { fila.token_hash = tokenHash; return { meta: { changes: 1 } }; }
+            return { meta: { changes: 0 } };
+        }
+
         if (/^INSERT INTO usuarios/.test(sql)) {
+            if (sql.includes("WHERE NOT EXISTS (SELECT 1 FROM usuarios WHERE rol='propietario'")) {
+                // Alta del propietario con guarda de máximo 1. binds: id, token_hash, creado_en.
+                const id = val(); const tokenHash = val(); const creadoEn = val();
+                const existePropietario = tablas.usuarios.some(r => r.rol === 'propietario' && r.estado === 'activo');
+                if (existePropietario) return { meta: { changes: 0 } };
+                tablas.usuarios.push({ id, token_hash: tokenHash, rol: 'propietario', estado: 'activo', creado_en: creadoEn, invitacion_id: null });
+                return { meta: { changes: 1 } };
+            }
             if (sql.includes('FROM invitaciones')) {
                 // Alta transaccional (activación): SOLO si la invitación existe y está
                 // 'pendiente' Y hay cupo. binds: id, token_hash, creado_en, codigo_hash, limite.
@@ -251,6 +294,24 @@ export function crearD1Stub() {
             const usuarioId = val(); const dia = val();
             const fila = tablas.uso_busqueda_diario.find(r => r.usuario_id === usuarioId && r.dia === dia);
             return fila ? { solicitudes: fila.solicitudes } : null;
+        }
+        if (/^SELECT id FROM claves_propietario WHERE clave_hash = \? AND estado = 'activa'/.test(sql)) {
+            const claveHash = val();
+            const fila = tablas.claves_propietario.find(r => r.clave_hash === claveHash && r.estado === 'activa');
+            return fila ? { id: fila.id } : null;
+        }
+        if (/^SELECT id FROM claves_propietario WHERE estado = 'activa' LIMIT 1/.test(sql)) {
+            const fila = tablas.claves_propietario.find(r => r.estado === 'activa');
+            return fila ? { id: fila.id } : null;
+        }
+        if (/^SELECT id FROM usuarios WHERE rol='propietario' AND estado='activo' LIMIT 1/.test(sql)) {
+            const fila = tablas.usuarios.find(r => r.rol === 'propietario' && r.estado === 'activo');
+            return fila ? { id: fila.id } : null;
+        }
+        if (/^SELECT id, estado, creado_en FROM usuarios WHERE rol='propietario'/.test(sql)) {
+            const fila = tablas.usuarios.find(r => r.rol === 'propietario');
+            if (!fila) return null;
+            return { id: fila.id, estado: fila.estado, creado_en: fila.creado_en };
         }
         return null;
     }

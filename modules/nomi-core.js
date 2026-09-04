@@ -106,11 +106,11 @@ function iniciarAsistente() {
     const mostrarConfig = debeMostrarConfiguracionInicial();
 
     if (NoMiState.historial.length === 0) {
-        const sistema = `Eres NoMi, un asistente profesional y formal pero cercano. Responde con claridad, respeto y precisión. Evita el tuteo excesivo y mantén un tono de colaboración entre iguales. El usuario espera respuestas útiles, concisas y bien estructuradas.\n\n**Si el usuario pregunta sobre su ubicación (ej: "¿dónde estoy?", "¿en qué ciudad estoy?"), usa los datos de ubicación que tienes en el contexto.** No digas que no tienes acceso a la ubicación.`;
+        const sistema = `Eres NoMi, una asistente virtual profesional, formal y cercana. Responde con claridad, respeto y precisión. Evita el tuteo excesivo y mantén un tono de colaboración entre iguales. Estás diseñada para ofrecer respuestas útiles, concisas y bien estructuradas. Refiérete a ti misma siempre en femenino (por ejemplo: "soy una asistente virtual", "estoy diseñada").\n\n**Si el usuario pregunta sobre su ubicación (ej: "¿dónde estoy?", "¿en qué ciudad estoy?"), usa los datos de ubicación que tienes en el contexto.** No digas que no tienes acceso a la ubicación.`;
         NoMiState.historial.unshift({ role: 'system', content: sistema });
         guardarHistorial(NoMiState.historial);
 
-        let bienvenida = `Hola, soy **${NOMBRE_ASISTENTE}**, su asistente de navegación.\nPara ver la lista de comandos disponibles, escriba \`!cmd\`.\n`;
+        let bienvenida = `Hola, soy **${NOMBRE_ASISTENTE}**, su asistente virtual. Estoy diseñada para acompañarle y responderle con claridad y respeto.\nPara ver la lista de comandos disponibles, escriba \`!cmd\`.\n`;
         if (mostrarConfig) bienvenida += `\n⚠️ **Es necesario configurar tus credenciales.**\nSe abrirá un asistente de configuración para que importes o ingreses tus claves de API.\n`;
         else if (NoMiState.modoAcceso === MODO_ACCESO_NOMI && NoMiState.nomiToken && NoMiState.nomiAccesoActivo) bienvenida += `\n🌐 Acceso compartido NoMi activo. Puedes chatear directamente.\n`;
         else if (!NoMiState.credencialesCargadas) bienvenida += `\n⚠️ **Aún no has configurado tus credenciales.** Ve al menú (⚙️) y selecciona "Importar credenciales" o ingresa tus claves manualmente para activar la búsqueda web y el acceso a la IA.\n`;
@@ -160,6 +160,19 @@ function limpiarSufijosTemporalesCiudad(ciudad) {
     return partes.join(' ').trim();
 }
 
+// Normaliza la ubicación detectada eliminando SOLO comillas, apóstrofes o
+// puntuación EXTERNOS (inicio/final). Conserva apóstrofes internos legítimos
+// (p. ej. "Sant'Agata") y no toca el interior de la cadena: evita que una comilla
+// o apóstrofo de cierre pegado por el usuario (p. ej. "Santa Cruz de la Sierra'")
+// llegue a Open-Meteo y rompa la resolución del geocoding.
+function normalizarUbicacionClima(ubicacion) {
+    let s = String(ubicacion || '').trim();
+    s = s.replace(/^[\s"'“”‘’]+/, '').replace(/[\s"'“”‘’]+$/, '');
+    s = s.replace(/^[¿¡…]+/, '');
+    s = s.replace(/[?!.,;:…]+$/, '');
+    return s.trim();
+}
+
 // Detección conservadora de consultas meteorológicas en modo NoMi. Devuelve la
 // ubicación a consultar o null (entonces el chat sigue normal).
 // - Palabras fuertes: clima, pronóstico/pronostico, temperatura, lluvia, viento.
@@ -184,16 +197,17 @@ function detectarClimaNoMi(texto) {
         /\btiempo\s+(hoy|mañana|manana|ahora)\b/i.test(t)
     );
     if (!climaFuerte && !climaPorTiempo) return null;
-    // a) Ciudad identificable tras "en …" (eliminando sufijos temporales).
+    // a) Ciudad identificable tras "en …" (normalizando extremos y eliminando
+    // sufijos temporales).
     const m = t.match(/\ben\s+([^?.,!¿¡]+)/i);
     if (m && m[1].trim().length >= 3) {
-        const ciudad = limpiarSufijosTemporalesCiudad(m[1].trim());
+        const ciudad = limpiarSufijosTemporalesCiudad(normalizarUbicacionClima(m[1]));
         if (ciudad.length >= 3) return ciudad;
     }
     // b) Ubicación local explícitamente habilitada.
     if (NoMiState.ubicacionActivada && NoMiState.ubicacionActual && NoMiState.ubicacionActual.ciudad) {
         const u = NoMiState.ubicacionActual;
-        return (u.ciudad + (u.pais ? ', ' + u.pais : '')).trim();
+        return (normalizarUbicacionClima(u.ciudad) + (u.pais ? ', ' + u.pais : '')).trim();
     }
     return null;
 }
@@ -201,10 +215,12 @@ function detectarClimaNoMi(texto) {
 // Detecta solicitudes de búsqueda web en modo NoMi (Tavily SOLO vía Worker).
 // Devuelve la consulta a buscar o null (el chat sigue su flujo normal).
 // - Comandos explícitos ("busca X", "investiga X"): SIEMPRE activan, sin exigir !search.
-// - Auto-detección SOLO de intención temporal inequívoca: patrones COMPUESTOS
-//   (evento/noticia + recencia). Palabras genéricas aisladas ("noticias",
-//   "precio", "resultados") NO activan nada por sí solas para evitar falsos
-//   positivos. El clima tiene prioridad y se evalúa antes en preguntar().
+// - Auto-detección: intención informativa inequívoca con marcador de recencia en
+//   el MISMO texto (aunque haya palabras intermedias entre ambos) o los patrones
+//   compuestos existentes. Palabras genéricas aisladas ("noticias", "precio",
+//   "eventos") NO activan nada por sí solas para evitar falsos positivos; la
+//   recencia explícita (hoy, actual, últimas, esta semana, recientemente…) es
+//   imprescindible. El clima tiene prioridad y se evalúa antes en preguntar().
 function detectarBusquedaNoMi(texto) {
     if (typeof texto !== 'string' || !texto.trim()) return null;
     const t = texto.trim();
@@ -223,6 +239,26 @@ function detectarBusquedaNoMi(texto) {
     ];
     for (const re of patronesTemporales) {
         if (re.test(t)) return t;
+    }
+    // Intención informativa + marcador de recencia en el mismo texto, aunque haya
+    // palabras intermedias (p. ej. "dime las noticias destacadas de Bolivia hoy").
+    // Los bordes usan clases EXTERNAS a \b porque en JS los acentos/ñ NO son \w
+    // (\b fallaría pegado a "ú", "ó", "ñ"); así "últimas" o "ganó" se reconocen.
+    // Palabras aisladas sin recencia (p. ej. "me gustan las noticias antiguas",
+    // "historia de Bolivia") quedan bloqueadas.
+    const inicioPalabra = '(?:^|[\\s¿¡(“"])';
+    const finPalabra = '(?=$|[\\s?.,!;:)”…])';
+    const intencionInformativa = new RegExp(
+        inicioPalabra + '(?:noticias?|titulares?|actualidad|novedades?|precios?|cotizaci[oó]n|resultados?|eventos?)' + finPalabra,
+        'i'
+    );
+    const marcadorRecencia = new RegExp(
+        inicioPalabra + '(?:hoy|actual(?:es)?|[uú]ltim[ao]s?|recientemente|ayer|anoche|esta\\s+semana|este\\s+fin\\s+de\\s+semana)' + finPalabra,
+        'i'
+    );
+    const recenciaPosPreposicion = /(?:de\s+hoy|del\s+d[ií]a)(?=$|[\s?.,!;:])/i;
+    if (intencionInformativa.test(t) && (marcadorRecencia.test(t) || recenciaPosPreposicion.test(t))) {
+        return t;
     }
     return null;
 }

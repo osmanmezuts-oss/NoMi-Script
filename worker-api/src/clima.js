@@ -11,6 +11,21 @@ import { E } from './errores.js';
 const GEOCODING_URL = 'https://geocoding-api.open-meteo.com/v1/search';
 const FORECAST_URL = 'https://api.open-meteo.com/v1/forecast';
 
+// Normaliza la ubicación recibida ANTES del geocoding eliminando SOLO comillas,
+// apóstrofes o puntuación EXTERNOS (inicio/final). Conserva apóstrofes internos
+// legítimos (p. ej. "Sant'Agata") y no toca el interior de la cadena: evita que
+// un apóstrofo de cierre pegado por el cliente (p. ej. "Santa Cruz de la Sierra'")
+// llegue a Open-Meteo y rompa la resolución. Espejo EXACTO de la normalización
+// del cliente (normalizarUbicacionClima en modules/nomi-core.js): defiende en el
+// Worker aunque el cliente no la aplique (defensa en profundidad).
+function normalizarUbicacionClima(ubicacion) {
+    let s = String(ubicacion || '').trim();
+    s = s.replace(/^[\s"'“”‘’]+/, '').replace(/[\s"'“”‘’]+$/, '');
+    s = s.replace(/^[¿¡…]+/, '');
+    s = s.replace(/[?!.,;:…]+$/, '');
+    return s.trim();
+}
+
 // Códigos meteorológicos WMO -> texto español conciso (sin relleno).
 const CONDICIONES_WMO = {
     0: 'despejado', 1: 'mayormente despejado', 2: 'parcialmente nublado', 3: 'nublado',
@@ -69,7 +84,10 @@ function construirRespuestaClima(nombre, pais, f) {
 // Devuelve { texto } o { error: 'ciudad_no_encontrada' | 'fallo_proveedor' }.
 // No lanza: el caller traduce a mensaje humano. No guarda nada.
 export async function consultarClima(env, ubicacion) {
-    const q = encodeURIComponent(ubicacion);
+    // Defensa en profundidad: el Worker normaliza ANTES del geocoding igual que
+    // el cliente, para no depender de él (comillas/apóstrofes/puntuación externos).
+    const ubicacionLimpia = normalizarUbicacionClima(ubicacion);
+    const q = encodeURIComponent(ubicacionLimpia);
     let geo;
     try {
         const r = await fetch(`${GEOCODING_URL}?name=${q}&count=1&language=es&format=json`);
@@ -81,7 +99,7 @@ export async function consultarClima(env, ubicacion) {
     const res = geo && geo.results && geo.results[0];
     if (!res || res.latitude == null || res.longitude == null) return { error: 'ciudad_no_encontrada' };
 
-    const nombre = res.name || ubicacion;
+    const nombre = res.name || ubicacionLimpia;
     const pais = res.country || res.country_code || '';
 
     let f;
@@ -95,4 +113,4 @@ export async function consultarClima(env, ubicacion) {
     return construirRespuestaClima(nombre, pais, f);
 }
 
-export const _internosClima = { mapearCondicion, construirRespuestaClima, CONDICIONES_WMO };
+export const _internosClima = { mapearCondicion, construirRespuestaClima, CONDICIONES_WMO, normalizarUbicacionClima };

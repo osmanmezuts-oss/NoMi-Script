@@ -325,6 +325,18 @@ hacerPeticion = async (url, opts) => {
     assert.ok(!msgFrontera2.includes(TOK_HIST), 'frontera: un byte más ya excede el presupuesto y se descarta el historial');
     assert.ok(byteLengthUTF8(msgFrontera2) <= 6000, 'frontera: sin el historial también debe respetar <= 6000 bytes');
 
+    // 20b) Identidad: NoMi se presenta como asistente virtual FEMENINA (persona al Worker).
+    assert.ok(/una asistente virtual/.test(NOMI_PERSONA_SISTEMA), 'persona: "una asistente virtual"');
+    assert.ok(/est[áa]s dise[ñn]ada/i.test(NOMI_PERSONA_SISTEMA), 'persona: "estás diseñada"');
+    assert.ok(/femenino/.test(NOMI_PERSONA_SISTEMA), 'persona: instrucción de género femenino');
+    assert.ok(!/un asistente/.test(NOMI_PERSONA_SISTEMA), 'persona: sin masculino genérico');
+    assert.ok(!/asistente de navegaci[óo]n/.test(NOMI_PERSONA_SISTEMA), 'persona: sin identidad antigua');
+    const msgPersona = construirMensajeWorkerNoMi('Pregunta del usuario: hola');
+    assert.ok(msgPersona.includes('una asistente virtual'), 'mensaje al Worker incluye "una asistente virtual"');
+    assert.ok(msgPersona.includes('femenino'), 'mensaje al Worker pide género femenino');
+    assert.ok(/est[áa]s dise[ñn]ada/i.test(msgPersona), 'mensaje al Worker incluye "estás diseñada"');
+    assert.ok(!/asistente de navegaci[óo]n/.test(msgPersona), 'mensaje al Worker sin saludo antiguo');
+
     // ===== Flujo completo de integración visual/funcional de modos IA =====
     // Mocks de DOM para capturar los indicadores superiores (nomi-proveedor-display
     // y nomi-modelo-display). Los stubs de getElementById del entorno no los tienen;

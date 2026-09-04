@@ -21,6 +21,8 @@ export const E = {
     metodoInvalido: () => new ApiError('metodo-invalido', 'Método no permitido.', 405),
     adminNoAutorizado: () => new ApiError('admin-no-autorizado', 'Administración no autorizada.', 401),
     invitacionYaRevocada: () => new ApiError('invitacion-ya-revocada', 'La invitación ya está revocada.', 409),
+    clavePropietariaInvalida: () => new ApiError('clave-propietaria-invalida', 'Clave de recuperación propietaria inválida o inactiva.', 400),
+    clavePropietariaNoActiva: () => new ApiError('clave-propietaria-no-activa', 'No hay ninguna clave propietaria activa.', 400),
     parametrosInvalidos: (detalle) => new ApiError('parametros-invalidos', detalle || 'Parámetros inválidos.', 400),
     noCacheError: () => new ApiError('sin-cache', 'Operación sin caché requerida.', 400),
 };

@@ -138,6 +138,13 @@ const pruebas = `
     assert.strictEqual(detectarClimaNoMi('que tiempo hace en La Paz?'), 'La Paz', 'expresion "que tiempo hace"');
     assert.strictEqual(detectarClimaNoMi('que tiempo hará en La Paz mañana?'), 'La Paz', 'expresion "que tiempo hará" + sufijo temporal recortado');
     assert.strictEqual(detectarClimaNoMi('tiempo hoy en Cochabamba'), 'Cochabamba', 'expresion "tiempo hoy"');
+    // OBLIGATORIO: normalización de ubicación (solo extremos; apóstrofes internos se conservan).
+    assert.strictEqual(normalizarUbicacionClima("Santa Cruz de la Sierra'"), 'Santa Cruz de la Sierra', 'normaliza apóstrofo de cierre');
+    assert.strictEqual(normalizarUbicacionClima("'Cochabamba'"), 'Cochabamba', 'normaliza comillas externas');
+    assert.strictEqual(normalizarUbicacionClima("Sant'Agata"), "Sant'Agata", 'conserva apóstrofo interno legítimo');
+    assert.strictEqual(normalizarUbicacionClima('La Paz?'), 'La Paz', 'normaliza puntuación final');
+    assert.strictEqual(detectarClimaNoMi("cual es el clima en Santa Cruz de la Sierra'?"), 'Santa Cruz de la Sierra', 'OBLIGATORIO: ciudad con apóstrofo final se resuelve');
+    assert.strictEqual(detectarClimaNoMi('como estara el clima hoy en "Santa Cruz"'), 'Santa Cruz', 'comillas externas limpias en detección');
     // Falsos positivos obligatorios: NUNCA deben llamar a Open-Meteo.
     assert.strictEqual(detectarClimaNoMi('cuanto tiempo tardas en responder?'), null, 'FP: "cuanto tiempo tardas"');
     assert.strictEqual(detectarClimaNoMi('tiempo de ejecución del script'), null, 'FP: "tiempo de ejecución"');
@@ -170,6 +177,19 @@ const pruebas = `
     assert.strictEqual(cuerpoCliente.herramienta.tipo, 'clima');
     assert.ok(cuerpoCliente.herramienta.ubicacion.includes('Santa Cruz'), 'ubicacion resuelta: ' + cuerpoCliente.herramienta.ubicacion);
     assert.ok(botMsgs.some((m) => m.includes('Ahora:')), 'la respuesta breve del clima se pinta en el chat');
+
+    // ===== 2b) OBLIGATORIO: apóstrofo final se normaliza antes de enviar =====
+    activarNoMi();
+    let cuerpoApost = null;
+    responder = async (url, opts) => {
+        if (url.includes('/v1/chat')) { cuerpoApost = JSON.parse(opts.body); return { ok: true, respuesta: 'Clima en Santa Cruz de la Sierra, Bolivia: 28°C.', climaEstado: 'ok' }; }
+        if (url.includes('/v1/usage')) return { periodo: '2026-08' };
+        throw new Error('inesperado en test 2b clima: ' + url);
+    };
+    botMsgs = [];
+    await preguntar("cual es el clima en Santa Cruz de la Sierra'?");
+    assert.ok(cuerpoApost && cuerpoApost.herramienta && cuerpoApost.herramienta.tipo === 'clima', 'apóstrofo final: se envía por la ruta clima');
+    assert.strictEqual(cuerpoApost.herramienta.ubicacion, 'Santa Cruz de la Sierra', 'apóstrofo final NUNCA viaja a Open-Meteo');
 
     // ===== 3) Sin ciudad ni ubicación: el chat NoMi NO activa clima =====
     activarNoMi();

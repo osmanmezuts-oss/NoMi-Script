@@ -137,8 +137,18 @@ const pruebas = `
     assert.strictEqual(detectarBusquedaNoMi('noticias de Santa Cruz hoy'), 'noticias de Santa Cruz hoy', 'auto: noticias + lugar');
     assert.strictEqual(detectarBusquedaNoMi('ultimas noticias'), 'ultimas noticias', 'auto: ultimas noticias');
     assert.strictEqual(detectarBusquedaNoMi('quien gano el partido ayer'), 'quien gano el partido ayer', 'auto: ganador + recencia');
+    // OBLIGATORIO: intención informativa + recencia con palabras intermedias.
+    assert.strictEqual(detectarBusquedaNoMi('dime las noticias destacadas de Bolivia hoy'), 'dime las noticias destacadas de Bolivia hoy', 'auto OBLIGATORIO: noticias destacadas + hoy (palabras intermedias)');
+    assert.strictEqual(detectarBusquedaNoMi('necesito saber las novedades del mercado esta semana por favor'), 'necesito saber las novedades del mercado esta semana por favor', 'auto: novedades + esta semana con intermedias');
+    assert.strictEqual(detectarBusquedaNoMi('hay titulares sobre el partido recientemente'), 'hay titulares sobre el partido recientemente', 'auto: titulares + recientemente');
+    assert.strictEqual(detectarBusquedaNoMi('que precio tiene el dolar de hoy'), 'que precio tiene el dolar de hoy', 'auto: precio + hoy');
+    assert.strictEqual(detectarBusquedaNoMi('cuales fueron los resultados de los examenes esta semana'), 'cuales fueron los resultados de los examenes esta semana', 'auto: resultados + esta semana');
+    assert.strictEqual(detectarBusquedaNoMi('la cotizacion del euro actual por favor'), 'la cotizacion del euro actual por favor', 'auto: cotizacion + actual');
     // Falsos positivos obligatorios (palabras genéricas aisladas NO activan).
     assert.strictEqual(detectarBusquedaNoMi('me gustan las noticias antiguas'), null, 'FP: noticias suelta');
+    assert.strictEqual(detectarBusquedaNoMi('historia de Bolivia'), null, 'FP OBLIGATORIO: historia sin recencia ni intención informativa');
+    assert.strictEqual(detectarBusquedaNoMi('me interesa la historia, no las noticias'), null, 'FP: noticias sin recencia (opinión/histórico)');
+    assert.strictEqual(detectarBusquedaNoMi('el precio del dolar fue estable'), null, 'FP: precio sin recencia');
     assert.strictEqual(detectarBusquedaNoMi('el precio de la casa era alto'), null, 'FP: precio suelto');
     assert.strictEqual(detectarBusquedaNoMi('cuentame un chiste'), null, 'FP: sin intención');
     assert.strictEqual(detectarBusquedaNoMi('que tiempo hara manana'), null, 'FP: eso es clima, no búsqueda');
@@ -147,6 +157,20 @@ const pruebas = `
 
     // ===== 2) Clima tiene prioridad sobre búsqueda general =====
     assert.strictEqual(detectarClimaNoMi('busca el clima en La Paz'), 'La Paz', 'clima detectado aunque haya comando');
+
+    // ===== 2b) Integración: el clima gana a la auto-detección aunque haya
+    //          "busca" y "noticias" con palabras intermedias =====
+    activarNoMi();
+    let cuerpoPri = null;
+    responder = async (url, opts) => {
+        if (url.includes('/v1/chat')) { cuerpoPri = JSON.parse(opts.body); return { ok: true, respuesta: 'Clima en La Paz: 18°C.', climaEstado: 'ok' }; }
+        if (url.includes('/v1/usage')) return { periodo: '2026-08' };
+        throw new Error('inesperado en test 2b búsqueda: ' + url);
+    };
+    botMsgs = [];
+    await preguntar('busca las noticias del clima en La Paz hoy');
+    assert.ok(cuerpoPri && cuerpoPri.herramienta && cuerpoPri.herramienta.tipo === 'clima', 'clima mantiene prioridad sobre búsqueda (aunque haya "busca"/"noticias")');
+    assert.strictEqual(cuerpoPri.herramienta.ubicacion, 'La Paz', 'ubicación limpia usada para clima: ' + cuerpoPri.herramienta.ubicacion);
 
     // ===== 3) Comando busca → ruta búsqueda NoMi (sin credenciales personales) =====
     activarNoMi();
@@ -179,6 +203,20 @@ const pruebas = `
     });
     const ultimoHist = NoMiState.historial[NoMiState.historial.length - 1];
     assert.ok(ultimoHist.role === 'assistant' && ultimoHist.content.includes('https://ejemplo.com/a'), 'historial conserva fuentes en texto plano');
+
+    // ===== 3c) OBLIGATORIO: auto-detección con palabras intermedias dispara Tavily NoMi =====
+    activarNoMi();
+    let cuerpoObl = null;
+    responder = async (url, opts) => {
+        if (url.includes('/v1/chat')) { cuerpoObl = JSON.parse(opts.body); return { ok: true, busquedaEstado: 'ok', resultados: [{ titulo: 'Bolivia', url: 'https://ejemplo.com/bolivia-hoy', contenido: 'Noticias de hoy.' }] }; }
+        throw new Error('inesperado en test 3c: ' + url);
+    };
+    botMsgs = [];
+    await preguntar('dime las noticias destacadas de Bolivia hoy');
+    assert.ok(cuerpoObl && cuerpoObl.herramienta && cuerpoObl.herramienta.tipo === 'busqueda', 'OBLIGATORIO: envía herramienta de búsqueda al Worker');
+    assert.strictEqual(cuerpoObl.herramienta.consulta, 'dime las noticias destacadas de Bolivia hoy', 'OBLIGATORIO: consulta completa (sin !search ni "Busca:")');
+    const enlacesObl = document.querySelectorAll('a');
+    assert.ok(enlacesObl.some((a) => a.href === 'https://ejemplo.com/bolivia-hoy'), 'OBLIGATORIO: renderiza fuentes de Tavily');
 
     // ===== 3b) P2-5: cliente re-valida URLs con new URL (sin query/hash) =====
     activarNoMi();
@@ -359,4 +397,8 @@ const bundle = fs.readFileSync(path.join(ROOT, 'NoMi Asistente V5.8.user.js'), '
 assert.ok(/@connect\s+api\.tavily\.com/.test(bundle), '@connect api.tavily.com presente (preserva búsqueda Personal directa en TM/VM)');
 assert.ok(/@connect\s+nomi-api-worker\./.test(bundle), '@connect del Worker NoMi presente');
 assert.ok(!/TAVILY_API_KEY/.test(bundle), 'el bundle NUNCA contiene TAVILY_API_KEY');
-console.log('OK: cabecera del bundle verificada (@connect api.tavily.com, sin secretos)');
+assert.ok(/su asistente virtual\./.test(bundle), 'bundle: saludo inicial femenino ("su asistente virtual")');
+assert.ok(/Estoy dise[ñn]ada/.test(bundle), 'bundle: saludo inicial con "estoy diseñada"');
+assert.ok(!/asistente de navegaci[óo]n/.test(bundle), 'bundle: sin saludo antiguo');
+assert.ok(/una asistente virtual/.test(bundle), 'bundle: NOMI_PERSONA_SISTEMA femenina ("una asistente virtual")');
+console.log('OK: cabecera del bundle verificada (@connect api.tavily.com, sin secretos, identidad femenina)');

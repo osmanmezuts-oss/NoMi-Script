@@ -47,6 +47,19 @@ export function hashToken(secret, token) {
     return hmacHash(secret, 'token:' + token);
 }
 
+// Prefijo legible + 32 bytes (~256 bits) en base64url: clave de RECUPERACIÓN del
+// propietario, larga y de alta entropía. NO es un código de invitación corto.
+export function generarClavePropietaria() {
+    const bytes = new Uint8Array(32);
+    cryptoGlobal.getRandomValues(bytes);
+    return 'nomi-pro-' + bytesToB64url(bytes);
+}
+
+// Hash de la clave propietaria (solo se guarda el hash, nunca el valor).
+export function hashClavePropietaria(secret, clave) {
+    return hmacHash(secret, 'propietario:' + clave);
+}
+
 // Genera un código de invitación opaco (A-Z0-9, sin caracteres ambiguos).
 export function generarCodigoInvitacion() {
     const bytes = new Uint8Array(6); // ~36 bits de entropía, suficiente para invitaciones.

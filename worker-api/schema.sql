@@ -76,3 +76,15 @@ CREATE TABLE IF NOT EXISTS uso_busqueda_diario (
     solicitudes INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (usuario_id, dia)
 );
+
+-- Claves permanentes de recuperación del propietario (Fase 3). Alta entropía,
+-- generadas SOLO por endpoint admin. Se guarda únicamente el hash HMAC (pepper
+-- ACCESS_TOKEN_SECRET, prefijo 'propietario:'); NUNCA texto plano. No expiran ni
+-- se consumen; solo se invalidan por rotación/revocación admin explícita.
+CREATE TABLE IF NOT EXISTS claves_propietario (
+    id TEXT PRIMARY KEY,             -- id opaca (no determinística)
+    clave_hash TEXT NOT NULL UNIQUE,-- HMAC-SHA256('propietario:' + clave, ACCESS_TOKEN_SECRET)
+    estado TEXT NOT NULL DEFAULT 'activa',  -- activa | revocada
+    creada_en INTEGER NOT NULL,      -- epoch ms
+    revocada_en INTEGER              -- epoch ms de la revocación (historial)
+);

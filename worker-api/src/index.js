@@ -404,6 +404,62 @@ async function handlerAdminLiberar(env, request) {
     return json({ ok: true, repetida: resultado.repetida, bolsa: creditos.bolsa, reserva: creditos.reserva });
 }
 
+// --- Acceso propietario: recuperación PÚBLICA con la clave permanente ----
+// Si aun no existe propietario activo, crea el ÚNICO usuario 'propietario'; si ya
+// existe, rota su token (el anterior queda inválido). La clave NO se consume ni
+// expira. NO acepta ni devuelve rol del cliente (el rol lo fija el servidor).
+async function handlerRecuperarPropietario(env, request) {
+    const body = await leerJsonLimitado(request, RESERVA.MAX_CUERPO_BYTES);
+    const clave = typeof body.clave === 'string' ? body.clave.trim() : '';
+    // La clave generada mide ~52 chars (prefijo + 32 bytes b64url); aceptamos un
+    // margen amplio, pero rechazamos textos que claramente no son una clave.
+    if (!clave || clave.length < 24 || clave.length > 200) {
+        throw E.clavePropietariaInvalida();
+    }
+    const db = new BaseDatos(env.NOMI_DB, env.ACCESS_TOKEN_SECRET);
+    const resultado = await db.recuperarPropietario(clave);
+    if (!resultado.ok) throw E.clavePropietariaInvalida();
+    // El token opaco se devuelve; la clave nunca se expone aquí.
+    return json({ ok: true, rol: 'propietario', token: resultado.token, rotado: resultado.rotado }, resultado.rotado ? 200 : 201);
+}
+
+// --- Acceso propietario (admin, protegido con ADMIN_SECRET) ---
+// Crea o ROTA la clave de recuperación del propietario. La devuelve UNA única vez
+// (solo su hash queda guardado). Nunca se lista en el bundle ni en el listado.
+async function handlerAdminClavePropietaria(env, request) {
+    autenticarAdmin(env, request);
+    const db = new BaseDatos(env.NOMI_DB, env.ACCESS_TOKEN_SECRET);
+    const { clave, id } = await db.crearClavePropietaria();
+    return json({ ok: true, id, clave }, 201);
+}
+
+// Revoca la clave de recuperación activa Y el propietario activo (transaccional).
+// El propietario deja de autenticar; los invitados no se ven afectados. Posterior
+// a la revocación se podrá crear una nueva clave.
+async function handlerAdminRevocarPropietario(env, request) {
+    autenticarAdmin(env, request);
+    const db = new BaseDatos(env.NOMI_DB, env.ACCESS_TOKEN_SECRET);
+    const resultado = await db.revocarAccesoPropietario();
+    if (!resultado.claveRevocada && !resultado.propietarioRevocado) {
+        throw E.clavePropietariaNoActiva();
+    }
+    return json({ ok: true, claveRevocada: resultado.claveRevocada, propietarioRevocado: resultado.propietarioRevocado }, 200);
+}
+
+// Listado admin del propietario: rol y estado, JAMÁS códigos, hashes ni tokens,
+// ni tampoco la clave de recuperación (solo si hay una activa).
+async function handlerAdminPropietario(env, request) {
+    autenticarAdmin(env, request);
+    const db = new BaseDatos(env.NOMI_DB, env.ACCESS_TOKEN_SECRET);
+    const propietario = await db.listarPropietario();
+    const claveActiva = !!(await db.buscarClavePropietariaActiva());
+    return json({
+        ok: true,
+        propietario: propietario ? { id: propietario.id, rol: 'propietario', estado: propietario.estado, creado_en: propietario.creado_en } : null,
+        claveActiva,
+    }, 200);
+}
+
 // --- Router principal ---
 export default {
     async fetch(request, env) {
@@ -412,6 +468,7 @@ export default {
             const url = new URL(request.url);
             const p = url.pathname;
             if (request.method === 'POST' && p === '/v1/activate') return await handlerActivacion(env, request);
+            if (request.method === 'POST' && p === '/v1/recuperar-propietario') return await handlerRecuperarPropietario(env, request);
             if (request.method === 'GET' && p === '/v1/catalog') return handlerCatalogo(env, request);
             if (request.method === 'GET' && p === '/v1/usage') return await handlerUso(env, request);
             if (request.method === 'POST' && p === '/v1/chat') return await handlerChat(env, request);
@@ -419,6 +476,9 @@ export default {
             if (request.method === 'GET' && p === '/admin/invitaciones') return await handlerAdminListado(env, request);
             if (request.method === 'POST' && p === '/admin/revocar') return await handlerAdminRevocar(env, request);
             if (request.method === 'POST' && p === '/admin/liberar') return await handlerAdminLiberar(env, request);
+            if (request.method === 'POST' && p === '/admin/propietario/clave') return await handlerAdminClavePropietaria(env, request);
+            if (request.method === 'POST' && p === '/admin/propietario/revocar') return await handlerAdminRevocarPropietario(env, request);
+            if (request.method === 'GET' && p === '/admin/propietario') return await handlerAdminPropietario(env, request);
             throw E.noEncontrado();
         } catch (err) {
             return errorHandler(err);

@@ -212,6 +212,46 @@ function mapearErrorActivacion(err) {
     return (err && err.message) ? err.message : 'No se pudo activar el acceso NoMi.';
 }
 
+// Recupera el acceso PROPIETARIO permanente con su clave de recuperación.
+// Llamada a /v1/recuperar-propietario. Si no existe propietario, lo crea; si ya
+// existe, rota su token (el anterior queda inválido). La clave NO se consume ni
+// se persiste en el navegador: SOLO se guarda el token opaco devuelto.
+async function recuperarAccesoPropietario(clave) {
+    resetearUrlWorkerNoMi();
+    const base = nomiWorkerBase();
+    let datos;
+    try {
+        datos = await hacerPeticion(base + '/v1/recuperar-propietario', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ clave: String(clave || '').trim() })
+        });
+    } catch (err) {
+        throw new Error(mapearErrorRecuperacionPropietario(err));
+    }
+    if (!datos || !datos.token) {
+        throw new Error('El servidor NoMi no devolvió un token de instalación.');
+    }
+    // NUNCA se persiste la clave; solo el token opaco de instalación.
+    setNomiWorkerUrl(NOMI_WORKER_URL_POR_DEFECTO);
+    setNomiToken(datos.token);
+    setNomiAccesoActivo(true);
+    try {
+        const cat = await obtenerCatalogoNoMi();
+        const m = (cat && cat.modelos || []).find(x => x && x.proveedor === 'groq' && x.estado === 'activo');
+        if (m && m.id) setNomiModelo(m.id);
+    } catch (_) { /* el catálogo es opcional para la recuperación */ }
+    return datos.token;
+}
+
+// Convierte errores HTTP de recuperación propietaria en mensajes claros.
+function mapearErrorRecuperacionPropietario(err) {
+    const status = err && typeof err.status === 'number' ? err.status : null;
+    if (status === 400) return 'La clave propietaria es inválida o ya no está activa.';
+    if (status === 401) return 'No autorizado por el servidor NoMi.';
+    return (err && err.message) ? err.message : 'No se pudo recuperar el acceso propietario NoMi.';
+}
+
 // Obtiene el catálogo PÚBLICO de modelos del Worker (sin Authorization).
 async function obtenerCatalogoNoMi() {
     const base = nomiWorkerBase();

@@ -3,7 +3,7 @@
 
 import { E } from './errores.js';
 import { CREDITOS, CAPACIDAD_DIARIA, periodoActual, diaActual } from './limites.js';
-import { hashCodigo, hashToken, generarIdOpaque, generarCodigoInvitacion, generarTokenInstalacion } from './crypto.js';
+import { hashCodigo, hashToken, generarIdOpaque, generarCodigoInvitacion, generarTokenInstalacion, generarClavePropietaria, hashClavePropietaria } from './crypto.js';
 
 export class BaseDatos {
     constructor(db, secret) {
@@ -145,6 +145,145 @@ export class BaseDatos {
             'SELECT id, rol, estado, primer_uso_dia, ultima_renovacion FROM usuarios WHERE token_hash = ?',
             tokenHash
         );
+    }
+
+    // ---- Acceso propietario permanente (clave de recuperación) ----
+    // La clave es larga y de alta entropía (generada por admin). SOLO se guarda su
+    // hash HMAC; nunca el valor. No expira ni se consume; solo se invalida por
+    // rotación/revocación admin explícita. El propietario NO cuenta dentro del
+    // cupo de invitados (MAX_INVITADOS), por lo que no compite con las invitaciones.
+
+    // Crea (o rota) la clave de recuperación del propietario. Transaccional:
+    // revoca CUALQUIER clave activa previa e inserta la nueva. Devuelve la clave
+    // UNA sola vez (solo el hash queda guardado).
+    async crearClavePropietaria() {
+        const clave = this.generarClavePropietaria();
+        const claveHash = await hashClavePropietaria(this.secret, clave);
+        const id = generarIdOpaque();
+        const ahora = Date.now();
+        const revocar = this.db.prepare(
+            "UPDATE claves_propietario SET estado='revocada', revocada_en = ? WHERE estado = 'activa'"
+        ).bind(ahora);
+        const insertar = this.db.prepare(
+            "INSERT INTO claves_propietario (id, clave_hash, estado, creada_en) VALUES (?, ?, 'activa', ?)"
+        ).bind(id, claveHash, ahora);
+        await this.db.batch([revocar, insertar]);
+        return { clave, id };
+    }
+
+    // Hay una clave de recuperación activa configurada (para el listado admin).
+    async buscarClavePropietariaActiva() {
+        const fila = await this.first("SELECT id FROM claves_propietario WHERE estado = 'activa' LIMIT 1");
+        return fila ? { id: fila.id } : null;
+    }
+
+    // Muestra el propietario (sin códigos, hashes ni tokens): para el listado admin.
+    async listarPropietario() {
+        const fila = await this.first(
+            "SELECT id, estado, creado_en FROM usuarios WHERE rol='propietario' ORDER BY creado_en ASC LIMIT 1"
+        );
+        return fila
+            ? { id: fila.id, estado: fila.estado, creado_en: fila.creado_en }
+            : null;
+    }
+
+    // Revoca la clave de recuperación activa Y el propietario activo (transaccional).
+    // El propietario deja de autenticar; la clave queda inutilizable. La activación
+    // de invitados NO se ve afectada.
+    async revocarAccesoPropietario() {
+        const ahora = Date.now();
+        const revocarClave = this.db.prepare(
+            "UPDATE claves_propietario SET estado='revocada', revocada_en = ? WHERE estado = 'activa'"
+        ).bind(ahora);
+        const revocarUsuario = this.db.prepare(
+            "UPDATE usuarios SET estado = 'revocado' WHERE rol = 'propietario' AND estado = 'activo'"
+        ).bind();
+        const resultados = await this.db.batch([revocarClave, revocarUsuario]);
+        return {
+            claveRevocada: !!(resultados[0] && resultados[0].meta && resultados[0].meta.changes === 1),
+            propietarioRevocado: !!(resultados[1] && resultados[1].meta && resultados[1].meta.changes === 1),
+        };
+    }
+
+    // Recupera el acceso propietario con la clave permanente.
+    //   - Si la clave es válida y no hay propietario activo -> crea el ÚNICO usuario
+    //     'propietario' (guarda atómica de máximo 1) y devuelve token opaco.
+    //   - Si ya existe propietario activo -> rota su token (el anterior queda inválido).
+    // La clave NO se consume (reutilizable de forma permanente).
+    // HARDNEDING DE CARRERA: la escritura que crea o rota el token verifica, EN LA
+    // MISMA sentencia, que el hash de la clave sigue 'activa'. Así, si la clave fue
+    // revocada o rotada DURANTE la operación (entre el SELECT previo y la escritura),
+    // la sentencia afecta 0 filas -> se devuelve { ok:false, motivo:'clave_invalida' }
+    // en lugar de emitir un token huérfano o sobrescribir el propietario inconsistentemente.
+    // Resultado: { ok:true, token, id, rotado } | { ok:false, motivo:'clave_invalida' }.
+    async recuperarPropietario(clave) {
+        const claveHash = await hashClavePropietaria(this.secret, clave);
+        // (1) Verificación previa para decisión rápida (ruta creación vs rotación).
+        const fila = await this.first(
+            "SELECT id FROM claves_propietario WHERE clave_hash = ? AND estado = 'activa'",
+            claveHash
+        );
+        if (!fila) return { ok: false, motivo: 'clave_invalida' };
+
+        const token = this.generarToken();
+        const tokenHash = await hashToken(this.secret, token);
+        const id = generarIdOpaque();
+        const creadoEn = Date.now();
+
+        const existente = await this.first(
+            "SELECT id FROM usuarios WHERE rol='propietario' AND estado='activo' LIMIT 1"
+        );
+        if (existente) {
+            // Rotación: reescribe token_hash CONDICIONALMENTE verificando que la
+            // clave sigue activa en la misma sentencia (AND EXISTS ... estado='activa').
+            const r = await this.run(
+                "UPDATE usuarios SET token_hash = ?\n" +
+                "WHERE rol='propietario' AND estado='activo'\n" +
+                "  AND EXISTS (SELECT 1 FROM claves_propietario WHERE clave_hash = ? AND estado = 'activa')",
+                tokenHash, claveHash
+            );
+            // Si la clave fue revocada/rotada entre el SELECT y UPDATE, changes===0.
+            if (r && r.meta && r.meta.changes === 1) {
+                return { ok: true, token, id: existente.id, rotado: true };
+            }
+            return { ok: false, motivo: 'clave_invalida' };
+        }
+
+        // Creación: INSERT con guarda de máximo 1 propietario Y verificación de que
+        // la clave sigue activa en la misma sentencia (WHERE NOT EXISTS propietario
+        // AND EXISTS clave activa).
+        const insertar = this.db.prepare(
+            `INSERT INTO usuarios (id, token_hash, rol, estado, creado_en)
+             SELECT ?, ?, 'propietario', 'activo', ?
+             WHERE NOT EXISTS (SELECT 1 FROM usuarios WHERE rol='propietario' AND estado='activo')
+               AND EXISTS (SELECT 1 FROM claves_propietario WHERE clave_hash = ? AND estado = 'activa')`
+        ).bind(id, tokenHash, creadoEn, claveHash);
+        const res = await insertar.run();
+        if (res && res.meta && res.meta.changes === 1) {
+            return { ok: true, token, id, rotado: false };
+        }
+        // Carrera: otro proceso creó al propietario o la clave fue revocada/rotada.
+        // Reintentar rotación SOLO si la clave sigue activa.
+        const claveActiva = await this.first(
+            "SELECT id FROM claves_propietario WHERE clave_hash = ? AND estado = 'activa'",
+            claveHash
+        );
+        if (!claveActiva) return { ok: false, motivo: 'clave_invalida' };
+        const ex = await this.first(
+            "SELECT id FROM usuarios WHERE rol='propietario' AND estado='activo' LIMIT 1"
+        );
+        if (!ex) return { ok: false, motivo: 'clave_invalida' };
+        // Rotación de rescate verificando clave activa en la misma sentencia.
+        const rr = await this.run(
+            "UPDATE usuarios SET token_hash = ?\n" +
+            "WHERE rol='propietario' AND estado='activo'\n" +
+            "  AND EXISTS (SELECT 1 FROM claves_propietario WHERE clave_hash = ? AND estado = 'activa')",
+            tokenHash, claveHash
+        );
+        if (rr && rr.meta && rr.meta.changes === 1) {
+            return { ok: true, token, id: ex.id, rotado: true };
+        }
+        return { ok: false, motivo: 'clave_invalida' };
     }
 
     // ---- Uso mensual / cuota ----
@@ -375,5 +514,6 @@ export class BaseDatos {
     // Hooks para tests (inyección de generación sin dependencias reales).
     generarCodigo() { return generarCodigoInvitacion(); }
     generarToken() { return generarTokenInstalacion(); }
+    generarClavePropietaria() { return generarClavePropietaria(); }
 
 }

@@ -89,6 +89,53 @@ test('clima NoMi devuelve respuesta breve sin Groq', async () => {
     assert.equal(uso.tokens, 0, 'la ruta de clima no consume cuota mensual de Groq');
 });
 
+test('la normalización de ubicación del Worker limpia extremos y preserva apóstrofes internos', async () => {
+    const { _internosClima } = await import('../src/clima.js');
+    assert.strictEqual(_internosClima.normalizarUbicacionClima("Santa Cruz de la Sierra'"), 'Santa Cruz de la Sierra', 'elimina apóstrofo final');
+    assert.strictEqual(_internosClima.normalizarUbicacionClima("'Cochabamba'"), 'Cochabamba', 'elimina comillas externas');
+    assert.strictEqual(_internosClima.normalizarUbicacionClima("Sant'Agata"), "Sant'Agata", 'preserva apóstrofe interno legítimo');
+    assert.strictEqual(_internosClima.normalizarUbicacionClima('La Paz?'), 'La Paz', 'elimina puntuación final');
+    assert.strictEqual(_internosClima.normalizarUbicacionClima('   Tarija  '), 'Tarija', 'recorta espacios externos');
+});
+
+test('geocoding no recibe el apóstrofo final y conserva los apóstrofes internos', async () => {
+    const env = envNuevo();
+    const { token } = await crearInvitado(env);
+    const urlsGeocoding = [];
+    globalThis.fetch = async (url) => {
+        const u = String(url);
+        if (u.includes('geocoding-api.open-meteo.com')) {
+            urlsGeocoding.push(u);
+            return new Response(JSON.stringify({ results: [{ name: 'Santa Cruz de la Sierra', country: 'Bolivia', country_code: 'BO', latitude: -17.78, longitude: -63.18 }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        if (u.includes('api.open-meteo.com')) {
+            return new Response(JSON.stringify({
+                current: { temperature_2m: 25.3, weather_code: 1, wind_speed_10m: 12.0 },
+                daily: { time: ['2026-08-21'], weather_code: [1], temperature_2m_max: [30.0], temperature_2m_min: [18.0], precipitation_probability_max: [10] },
+            }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        throw new Error('URL inesperada en ruta de clima: ' + u);
+    };
+    // a) Apóstrofo final: la URL de geocoding NO debe contener el carácter ni su codificación.
+    await llamar(env, '/v1/chat', {
+        metodo: 'POST', token,
+        body: { herramienta: { tipo: 'clima', ubicacion: "Santa Cruz de la Sierra'" } },
+    });
+    assert.ok(urlsGeocoding.length >= 1, 'se llamó al geocoding');
+    assert.ok(!urlsGeocoding[0].includes('%27'), 'la URL de geocoding no contiene el apóstrofo final codificado: ' + urlsGeocoding[0]);
+    assert.ok(!decodeURIComponent(urlsGeocoding[0]).includes("'"), 'la URL de geocoding no contiene el apóstrofo final: ' + urlsGeocoding[0]);
+    assert.ok(decodeURIComponent(urlsGeocoding[0]).includes('Santa Cruz de la Sierra'), 'la consulta conserva el nombre de la ciudad');
+
+    // b) Apóstrofe interno: se conserva en la URL de geocoding.
+    urlsGeocoding.length = 0;
+    await llamar(env, '/v1/chat', {
+        metodo: 'POST', token,
+        body: { herramienta: { tipo: 'clima', ubicacion: "Sant'Agata" } },
+    });
+    assert.ok(urlsGeocoding.length >= 1, 'se llamó al geocoding (apóstrofe interno)');
+    assert.ok(decodeURIComponent(urlsGeocoding[0]).includes("Sant'Agata"), 'el apóstrofe interno se conserva: ' + urlsGeocoding[0]);
+});
+
 test('ciudad inexistente pide ciudad/país', async () => {
     const env = envNuevo();
     const { token } = await crearInvitado(env);
