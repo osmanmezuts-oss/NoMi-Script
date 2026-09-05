@@ -16,7 +16,7 @@
 import { ApiError, E } from './errores.js';
 import { CATALOGO, modeloPermitido, catalogoPublico } from './catalogo.js';
 import { BaseDatos } from './db.js';
-import { llamarGroq, MODO_GROQ, HERRAMIENTAS_BUSQUEDA_TOKENS } from './groq.js';
+import { llamarGroq, MODO_GROQ, crearHerramientasNoMi } from './groq.js';
 import { consultarClima } from './clima.js';
 import { consultarBusqueda } from './tavily.js';
 import { RateLimiterDO } from './rate-limiter-do.js';
@@ -169,7 +169,7 @@ function tokensEntradaGroq(mensajes) {
 // rollback y conciliación. El orquestador semántico la invoca una vez para la
 // decisión/respuesta normal y, solo si hubo herramienta, otra para la síntesis.
 // Así cada petición del proveedor queda contabilizada en DO, D1 y bolsa.
-async function ejecutarGroqContabilizado(env, db, usuario, { modelo, mensajes, maxTokens, modo }) {
+async function ejecutarGroqContabilizado(env, db, usuario, { modelo, mensajes, maxTokens, modo, herramientas = [] }) {
     const uso = await db.obtenerUso(usuario.id);
     if (uso.tokens >= CREDITOS.INVITADO_POR_MES) throw E.cuotaAgotada();
     await db.obtenerCreditos();
@@ -188,8 +188,8 @@ async function ejecutarGroqContabilizado(env, db, usuario, { modelo, mensajes, m
     );
     if (maxSalida <= 0) throw E.capacidadTemporal();
 
-    const herramientasTokens = (modo === MODO_GROQ.DECISION_BUSQUEDA || modo === MODO_GROQ.BUSQUEDA_FORZADA)
-        ? HERRAMIENTAS_BUSQUEDA_TOKENS * RESERVA.TOKENS_POR_BYTE_ENTRADA
+    const herramientasTokens = Array.isArray(herramientas) && herramientas.length
+        ? bytesTexto(JSON.stringify(herramientas)) * RESERVA.TOKENS_POR_BYTE_ENTRADA
         : 0;
     const tokensReservados = tokensEntradaGroq(mensajes)
         + tokensSistemaGroq(modo)
@@ -221,7 +221,7 @@ async function ejecutarGroqContabilizado(env, db, usuario, { modelo, mensajes, m
 
     let resultado;
     try {
-        resultado = await llamarGroq(env, { modelo, mensajes, max_tokens: maxSalida, modo });
+        resultado = await llamarGroq(env, { modelo, mensajes, max_tokens: maxSalida, modo, herramientas });
     } catch (err) {
         await doObj.fetch('https://internal/liberar', { method: 'POST', body: JSON.stringify({ reservaId: reserva.reservaId }) });
         await db.reconciliarUso(usuario.id, tokensReservados);
@@ -286,16 +286,79 @@ async function ejecutarBusquedaConCuota(env, db, usuario, solicitud, paraSintesi
     return { estado: 'ok', resultados: busqueda.resultados };
 }
 
-function extraerSolicitudDeToolCalls(toolCalls) {
+function normalizarTextoCorto(valor, max = 120) {
+    const texto = typeof valor === 'string' ? valor.trim() : '';
+    return texto.length >= 2 && texto.length <= max ? texto : '';
+}
+
+function normalizarContextoTemporal(valor) {
+    if (!valor || typeof valor !== 'object' || Array.isArray(valor)) return null;
+    const fecha = typeof valor.fecha === 'string' ? valor.fecha : '';
+    const hora = typeof valor.hora === 'string' ? valor.hora : '';
+    const zona = typeof valor.zona === 'string' ? valor.zona.trim() : '';
+    const offset = typeof valor.offset === 'string' ? valor.offset : '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha) || !/^\d{2}:\d{2}$/.test(hora)
+        || !zona || zona.length > 64 || !/^UTC[+-]\d{2}:\d{2}$/.test(offset)) return null;
+    const d = new Date(`${fecha}T00:00:00Z`);
+    if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== fecha) return null;
+    return { fecha, hora, zona, offset };
+}
+
+function normalizarSolicitudClima(datos) {
+    if (!datos || typeof datos !== 'object' || Array.isArray(datos)) return null;
+    if (Object.keys(datos).some(clave => !['ubicacion', 'fecha'].includes(clave))) return null;
+    const fecha = typeof datos.fecha === 'string' ? datos.fecha : '';
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(fecha) ? new Date(`${fecha}T00:00:00Z`) : null;
+    if (!d || Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== fecha) return null;
+    if (datos.ubicacion !== undefined && !normalizarTextoCorto(datos.ubicacion)) return null;
+    return { fecha, ubicacion: normalizarTextoCorto(datos.ubicacion) };
+}
+
+function extraerLlamadaHerramienta(toolCalls) {
     if (!Array.isArray(toolCalls) || toolCalls.length !== 1) return null;
     const llamada = toolCalls[0];
-    if (!llamada || llamada.type !== 'function' || !llamada.function
-        || llamada.function.name !== 'busqueda_web') return null;
-    try {
-        return normalizarSolicitudBusqueda(JSON.parse(llamada.function.arguments || '{}'));
-    } catch {
-        return null;
+    if (!llamada || llamada.type !== 'function' || !llamada.function) return null;
+    let argumentos;
+    try { argumentos = JSON.parse(llamada.function.arguments || '{}'); } catch { return null; }
+    if (llamada.function.name === 'busqueda_web') {
+        const solicitud = normalizarSolicitudBusqueda(argumentos);
+        return solicitud ? { tipo: 'busqueda', solicitud } : null;
     }
+    if (llamada.function.name === 'consultar_clima') {
+        const solicitud = normalizarSolicitudClima(argumentos);
+        return solicitud ? { tipo: 'clima', solicitud } : null;
+    }
+    return null;
+}
+
+async function ejecutarClimaConCuota(env, db, usuario, ubicacion, fecha, fechaLocal) {
+    if (!ubicacion) {
+        return { estado: 'falta_ubicacion', respuesta: '¿En qué ciudad y país quieres consultar el clima?' };
+    }
+    const objetivo = new Date(`${fecha}T00:00:00Z`);
+    const base = new Date(`${fechaLocal}T00:00:00Z`);
+    const dias = Math.round((objetivo.getTime() - base.getTime()) / 86400000);
+    if (!Number.isFinite(dias) || dias < 0 || dias > 15) {
+        return { estado: 'consulta_invalida', respuesta: 'Puedo consultar el pronóstico desde hoy hasta los próximos 15 días.' };
+    }
+    const hoy = diaActual();
+    const registro = await db.intentarRegistrarClima(usuario.id, hoy);
+    if (!registro.ok) {
+        return { estado: 'limite_diario', respuesta: 'Has superado el límite de consultas de clima por hoy (20). Inténtalo mañana.' };
+    }
+    const clima = await consultarClima(env, ubicacion, { fecha, fechaLocal });
+    if (clima.error === 'ciudad_no_encontrada') {
+        return { estado: 'ciudad_no_encontrada', respuesta: 'No encontré la ciudad. Indica la ciudad y el país (por ejemplo, Santa Cruz de la Sierra, Bolivia).' };
+    }
+    if (clima.error === 'fecha_invalida') {
+        try { await db.liberarConsultaClima(usuario.id, hoy); } catch { /* best effort */ }
+        return { estado: 'consulta_invalida', respuesta: 'No pude interpretar la fecha solicitada. Indica el día de otra forma.' };
+    }
+    if (clima.error === 'fallo_proveedor') {
+        try { await db.liberarConsultaClima(usuario.id, hoy); } catch { /* best effort */ }
+        return { estado: 'fallo_proveedor', respuesta: 'No se pudo consultar el clima ahora. Reintenta.' };
+    }
+    return { estado: 'ok', respuesta: clima.texto };
 }
 
 function preguntaActualDesdeMensaje(mensaje) {
@@ -354,30 +417,11 @@ async function handlerChat(env, request) {
         if (!ubicacion || ubicacion.length < 2 || ubicacion.length > 120) {
             throw E.parametrosInvalidos('Indica una ciudad válida para consultar el clima.');
         }
-        const hoy = diaActual();
-        const registro = await db.intentarRegistrarClima(usuario.id, hoy);
-        // `climaEstado`: señal explícita y estable para el cliente (nunca debe
-        // inferirse del texto humano). Valores: ok | ciudad_no_encontrada |
-        // limite_diario | fallo_proveedor.
-        if (!registro.ok) {
-            // Límite diario alcanzado: mensaje humano, sin fuga técnica ni 429 de Groq.
-            return json({ ok: true, respuesta: 'Has superado el límite de consultas de clima por hoy (20). Inténtalo mañana.', climaEstado: 'limite_diario' });
-        }
-        const clima = await consultarClima(env, ubicacion);
-        if (clima.error === 'ciudad_no_encontrada') {
-            // La petición SÍ fue procesada por el proveedor (geocoding): consume
-            // cupo. Así se evita sondear el endpoint externo sin límite.
-            return json({ ok: true, respuesta: 'No encontré la ciudad. Indica la ciudad y el país (por ejemplo, Santa Cruz de la Sierra, Bolivia).', climaEstado: 'ciudad_no_encontrada' });
-        }
-        if (clima.error === 'fallo_proveedor') {
-            // Fallo técnico de Open-Meteo/red: culpa ajena al usuario, NO debe
-            // castigar su cupo diario. Rollback best-effort del registro atómico
-            // (nunca baja de 0); si falla el rollback, la respuesta humana es
-            // igualmente válida y el usuario reintenta.
-            try { await db.liberarConsultaClima(usuario.id, hoy); } catch { /* no bloquea la respuesta */ }
-            return json({ ok: true, respuesta: 'No se pudo consultar el clima ahora. Reintenta.', climaEstado: 'fallo_proveedor' });
-        }
-        return json({ ok: true, respuesta: clima.texto, climaEstado: 'ok' });
+        const temporal = normalizarContextoTemporal(body.contextoTemporal);
+        const fechaLocal = temporal ? temporal.fecha : diaActual();
+        const fecha = typeof herramienta.fecha === 'string' ? herramienta.fecha : fechaLocal;
+        const resultado = await ejecutarClimaConCuota(env, db, usuario, ubicacion, fecha, fechaLocal);
+        return json({ ok: true, respuesta: resultado.respuesta, climaEstado: resultado.estado, herramientasProtocolo: 1 });
     }
 
     // --- Ruta de búsqueda web (herramienta, Tavily SOLO desde el Worker) ---
@@ -405,6 +449,10 @@ async function handlerChat(env, request) {
     const mensaje = typeof body.mensaje === 'string' ? body.mensaje : '';
     const forzarBusqueda = body.forzarBusqueda === true;
     const permitirBusqueda = body.permitirBusqueda === true || forzarBusqueda;
+    const permitirClima = body.permitirClima === true && !forzarBusqueda;
+    const temporal = normalizarContextoTemporal(body.contextoTemporal);
+    const ubicacionHabitual = normalizarTextoCorto(body.ubicacionHabitual);
+    const ubicacionDispositivo = normalizarTextoCorto(body.ubicacionDispositivo);
 
     if (!modeloPermitido(modelo)) throw E.modeloNoPermitido();
     if (!mensaje || !mensaje.trim()) throw E.parametrosInvalidos('Falta el mensaje.');
@@ -413,36 +461,56 @@ async function handlerChat(env, request) {
     const bytesEntrada = new TextEncoder().encode(mensaje).length;
     if (bytesEntrada > RESERVA.MAX_ENTRADA_BYTES) throw E.parametrosInvalidos('Mensaje demasiado largo.');
 
+    const herramientas = crearHerramientasNoMi({ permitirBusqueda, permitirClima, forzarBusqueda });
     // Primera llamada: el modelo responde directamente o solicita una única
-    // búsqueda semántica. La preferencia desactivada usa el chat normal sin tools.
+    // herramienta semántica. Las preferencias desactivadas usan chat sin tools.
     const primera = await ejecutarGroqContabilizado(env, db, usuario, {
         modelo,
         mensajes: [{ role: 'user', content: mensaje }],
         maxTokens: RESERVA.MAX_SALIDA_TOKENS,
         modo: forzarBusqueda
             ? MODO_GROQ.BUSQUEDA_FORZADA
-            : (permitirBusqueda ? MODO_GROQ.DECISION_BUSQUEDA : MODO_GROQ.NORMAL),
+            : (herramientas.length ? MODO_GROQ.DECISION_BUSQUEDA : MODO_GROQ.NORMAL),
+        herramientas,
     });
-    if (!permitirBusqueda || primera.toolCalls.length === 0) {
+    if (!herramientas.length || primera.toolCalls.length === 0) {
         if (!primera.texto.trim()) throw E.proveedorNoDisponible();
-        return json({ ok: true, respuesta: primera.texto, busquedaProtocolo: 1 });
+        return json({ ok: true, respuesta: primera.texto, busquedaProtocolo: 1, herramientasProtocolo: 1 });
     }
 
     // Solo se acepta exactamente una llamada a la función permitida. No se
     // ejecutan herramientas desconocidas, múltiples ni argumentos no válidos.
-    const solicitud = extraerSolicitudDeToolCalls(primera.toolCalls);
-    if (!solicitud) {
+    const llamada = extraerLlamadaHerramienta(primera.toolCalls);
+    if (!llamada
+        || (llamada.tipo === 'clima' && !permitirClima)
+        || (llamada.tipo === 'busqueda' && !permitirBusqueda)) {
         return json({
             ok: true,
-            respuesta: 'No pude preparar una búsqueda web segura. Reformula la pregunta.',
+            respuesta: 'No pude preparar la consulta externa de forma segura. Reformula la pregunta.',
             busquedaEstado: 'consulta_invalida',
             busquedaProtocolo: 1,
+            herramientasProtocolo: 1,
         });
     }
 
+    if (llamada.tipo === 'clima') {
+        const ubicacion = llamada.solicitud.ubicacion || ubicacionHabitual || ubicacionDispositivo;
+        const fechaLocal = temporal ? temporal.fecha : diaActual();
+        const resultado = await ejecutarClimaConCuota(env, db, usuario, ubicacion, llamada.solicitud.fecha, fechaLocal);
+        return json({
+            ok: true,
+            respuesta: resultado.respuesta,
+            climaEstado: resultado.estado,
+            busquedaProtocolo: 1,
+            herramientasProtocolo: 1,
+        });
+    }
+
+    const solicitud = llamada.solicitud;
+
     const busqueda = await ejecutarBusquedaConCuota(env, db, usuario, solicitud, true);
     if (busqueda.estado !== 'ok') {
-        return json({ ok: true, respuesta: busqueda.respuesta, busquedaEstado: busqueda.estado, busquedaProtocolo: 1 });
+        return json({ ok: true, respuesta: busqueda.respuesta, busquedaEstado: busqueda.estado, busquedaProtocolo: 1, herramientasProtocolo: 1 });
     }
 
     // Segunda y última llamada: sintetiza evidencia saneada. No se vuelven a
@@ -468,6 +536,7 @@ async function handlerChat(env, request) {
                 respuesta: 'Encontré fuentes, pero no pude preparar la respuesta. Reintenta.',
                 busquedaEstado: 'fallo_sintesis',
                 busquedaProtocolo: 1,
+                herramientasProtocolo: 1,
             });
         }
         throw err;
@@ -478,6 +547,7 @@ async function handlerChat(env, request) {
             respuesta: 'Encontré fuentes, pero no pude preparar la respuesta. Reintenta.',
             busquedaEstado: 'fallo_sintesis',
             busquedaProtocolo: 1,
+            herramientasProtocolo: 1,
         });
     }
 
@@ -486,7 +556,7 @@ async function handlerChat(env, request) {
         url: resultado.url,
         fecha: resultado.fecha || '',
     }));
-    return json({ ok: true, respuesta: sintesis.texto, busquedaEstado: 'ok', busquedaProtocolo: 1, fuentes });
+    return json({ ok: true, respuesta: sintesis.texto, busquedaEstado: 'ok', busquedaProtocolo: 1, herramientasProtocolo: 1, fuentes });
 }
 
 // Evidencia técnica SIN contenido de usuario (no se guarda prompt/respuesta).

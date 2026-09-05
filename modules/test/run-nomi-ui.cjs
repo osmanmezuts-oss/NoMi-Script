@@ -375,6 +375,8 @@ const pruebas = `
     assert.ok(document.getElementById('nomi-select-motor'), 'falta select motor');
     assert.ok(document.getElementById('nomi-select-modo'), 'falta select modo');
     assert.ok(document.getElementById('nomi-check-ubicacion'), 'falta check ubicacion');
+    assert.ok(document.getElementById('nomi-input-ubicacion-habitual'), 'falta ciudad habitual');
+    assert.ok(document.getElementById('nomi-guardar-ubicacion-habitual'), 'falta botón para guardar ciudad habitual');
     assert.ok(document.getElementById('nomi-check-ligero'), 'falta check ligero');
     assert.ok(document.getElementById('nomi-check-resumen'), 'falta check resumen');
     assert.ok(document.getElementById('nomi-check-busqueda'), 'falta check busqueda');

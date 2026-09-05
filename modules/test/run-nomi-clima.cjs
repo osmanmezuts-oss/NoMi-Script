@@ -129,185 +129,82 @@ const pruebas = `
         NoMiState.climaAutomatico = getClimaAutomatico();
     }
 
-    // ===== 1) Detección conservadora (unidad) =====
-    assert.strictEqual(detectarClimaNoMi('como estara el clima hoy en Santa Cruz de la Sierra?'), 'Santa Cruz de la Sierra');
-    assert.strictEqual(detectarClimaNoMi('cual sera la temperatura en Cochabamba?'), 'Cochabamba');
-    assert.strictEqual(detectarClimaNoMi('habra lluvia en Oruro?'), 'Oruro');
-    assert.strictEqual(detectarClimaNoMi('como esta el viento en El Alto?'), 'El Alto');
-    assert.strictEqual(detectarClimaNoMi('que pronóstico hay para mañana en La Paz?'), 'La Paz');
-    // "tiempo" solo en expresiones meteorológicas claras.
-    assert.strictEqual(detectarClimaNoMi('que tiempo hace en La Paz?'), 'La Paz', 'expresion "que tiempo hace"');
-    assert.strictEqual(detectarClimaNoMi('que tiempo hará en La Paz mañana?'), 'La Paz', 'expresion "que tiempo hará" + sufijo temporal recortado');
-    assert.strictEqual(detectarClimaNoMi('tiempo hoy en Cochabamba'), 'Cochabamba', 'expresion "tiempo hoy"');
-    // OBLIGATORIO: normalización de ubicación (solo extremos; apóstrofes internos se conservan).
-    assert.strictEqual(normalizarUbicacionClima("Santa Cruz de la Sierra'"), 'Santa Cruz de la Sierra', 'normaliza apóstrofo de cierre');
-    assert.strictEqual(normalizarUbicacionClima("'Cochabamba'"), 'Cochabamba', 'normaliza comillas externas');
-    assert.strictEqual(normalizarUbicacionClima("Sant'Agata"), "Sant'Agata", 'conserva apóstrofo interno legítimo');
-    assert.strictEqual(normalizarUbicacionClima('La Paz?'), 'La Paz', 'normaliza puntuación final');
-    assert.strictEqual(detectarClimaNoMi("cual es el clima en Santa Cruz de la Sierra'?"), 'Santa Cruz de la Sierra', 'OBLIGATORIO: ciudad con apóstrofo final se resuelve');
-    assert.strictEqual(detectarClimaNoMi('como estara el clima hoy en "Santa Cruz"'), 'Santa Cruz', 'comillas externas limpias en detección');
-    // Falsos positivos obligatorios: NUNCA deben llamar a Open-Meteo.
-    assert.strictEqual(detectarClimaNoMi('cuanto tiempo tardas en responder?'), null, 'FP: "cuanto tiempo tardas"');
-    assert.strictEqual(detectarClimaNoMi('tiempo de ejecución del script'), null, 'FP: "tiempo de ejecución"');
-    // Sin ciudad ni ubicación local -> NO se activa clima automáticamente.
-    assert.strictEqual(detectarClimaNoMi('que tal el clima hoy?'), null, 'sin ciudad y sin ubicacion -> null');
-    assert.strictEqual(detectarClimaNoMi('cuentame un chiste'), null, 'sin palabra de clima -> null');
-    assert.strictEqual(detectarClimaNoMi(''), null, 'vacio -> null');
-    assert.strictEqual(detectarClimaNoMi(null), null, 'null -> null');
-    // Ubicación local habilitada cubre la ausencia de "en …".
-    NoMiState.ubicacionActivada = true;
-    NoMiState.ubicacionActual = { ciudad: 'Cochabamba', pais: 'Bolivia', fuente: 'gps', timestamp: Date.now() };
-    assert.strictEqual(detectarClimaNoMi('que tal el clima hoy?'), 'Cochabamba, Bolivia', 'ubicacion local habilita clima');
-    NoMiState.ubicacionActivada = false; NoMiState.ubicacionActual = null;
+    // ===== 1) La decisión climática no vive en el cliente =====
+    assert.strictEqual(typeof detectarClimaNoMi, 'undefined', 'sin detector léxico/regex en producción');
+    assert.strictEqual(typeof normalizarUbicacionClima, 'undefined', 'la ubicación explícita la extrae semánticamente el modelo');
 
-    // ===== 2) NoMi + ciudad: envía herramienta clima al Worker, sin Groq/OpenRouter =====
+    // ===== 2) NoMi envía herramientas, anclaje local y fallbacks estructurados =====
     activarNoMi();
-    let llamadasChat = 0, cuerpoCliente = null;
+    setUbicacionHabitual('Cochabamba, Bolivia');
+    NoMiState.ubicacionHabitual = getUbicacionHabitual();
+    NoMiState.ubicacionActivada = true;
+    NoMiState.ubicacionActual = { ciudad: 'La Paz', pais: 'Bolivia', fuente: 'gps', timestamp: Date.now() };
+    let cuerpoCliente = null;
     responder = async (url, opts) => {
         if (url.includes('/v1/chat')) {
-            llamadasChat++;
             cuerpoCliente = JSON.parse(opts.body);
-            return { ok: true, respuesta: 'Clima en Santa Cruz de la Sierra, Bolivia: Ahora: despejado, 22°C. Hoy: max 30°C / min 18°C.' };
+            return { ok: true, respuesta: 'Mañana en Santa Cruz: lluvias probables.\\nMañana (06–11): 20°C.\\nTarde (12–17): 28°C.\\nNoche (18–23): 22°C.\\nRecomendación: lleve paraguas.', climaEstado: 'ok', busquedaProtocolo: 1, herramientasProtocolo: 1 };
         }
-        throw new Error('inesperado en test 2: ' + url);
+        if (url.includes('/v1/usage')) return { periodo: '2026-09', cuota_mensual_invitado: 50, tokens_usados: 1, solicitudes_usadas: 1 };
+        throw new Error('inesperado en test semántico: ' + url);
     };
     botMsgs = [];
-    await preguntar('cual es el clima en Santa Cruz de la Sierra?');
-    assert.strictEqual(llamadasChat, 1, 'consulta de clima llama al Worker 1 vez');
-    assert.ok(cuerpoCliente.herramienta, 'el cuerpo incluye herramienta');
-    assert.strictEqual(cuerpoCliente.herramienta.tipo, 'clima');
-    assert.ok(cuerpoCliente.herramienta.ubicacion.includes('Santa Cruz'), 'ubicacion resuelta: ' + cuerpoCliente.herramienta.ubicacion);
-    assert.ok(botMsgs.some((m) => m.includes('Ahora:')), 'la respuesta breve del clima se pinta en el chat');
+    await preguntar('¿Necesitaré paraguas al salir mañana en Santa Cruz?');
+    assert.ok(cuerpoCliente, 'consulta NoMi enviada');
+    assert.strictEqual(cuerpoCliente.herramienta, undefined, 'el cliente no decide ni construye la herramienta');
+    assert.strictEqual(cuerpoCliente.permitirClima, true, 'habilita decisión climática semántica');
+    assert.ok(cuerpoCliente.contextoTemporal && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(cuerpoCliente.contextoTemporal.fecha), 'fecha local estructurada');
+    assert.ok(/^[0-9]{2}:[0-9]{2}$/.test(cuerpoCliente.contextoTemporal.hora), 'hora local estructurada');
+    assert.ok(cuerpoCliente.contextoTemporal.zona, 'zona IANA estructurada');
+    assert.match(cuerpoCliente.contextoTemporal.offset, /^UTC[+-][0-9]{2}:[0-9]{2}$/);
+    assert.strictEqual(cuerpoCliente.ubicacionHabitual, 'Cochabamba, Bolivia');
+    assert.strictEqual(cuerpoCliente.ubicacionDispositivo, 'La Paz, Bolivia');
+    assert.ok(botMsgs.some(m => m.includes('Mañana (06–11)')), 'pinta el pronóstico por franjas');
 
-    // ===== 2b) OBLIGATORIO: apóstrofo final se normaliza antes de enviar =====
+    // ===== 3) Sin ubicación: conserva la pregunta única del Worker para continuar =====
     activarNoMi();
-    let cuerpoApost = null;
+    setUbicacionHabitual('');
+    let cuerpoSinUbicacion = null;
     responder = async (url, opts) => {
-        if (url.includes('/v1/chat')) { cuerpoApost = JSON.parse(opts.body); return { ok: true, respuesta: 'Clima en Santa Cruz de la Sierra, Bolivia: 28°C.', climaEstado: 'ok' }; }
-        if (url.includes('/v1/usage')) return { periodo: '2026-08' };
-        throw new Error('inesperado en test 2b clima: ' + url);
+        if (url.includes('/v1/chat')) {
+            cuerpoSinUbicacion = JSON.parse(opts.body);
+            return { ok: true, respuesta: '¿En qué ciudad y país quieres consultar el clima?', climaEstado: 'falta_ubicacion', busquedaProtocolo: 1, herramientasProtocolo: 1 };
+        }
+        if (url.includes('/v1/usage')) return { periodo: '2026-09' };
+        throw new Error('inesperado sin ubicación: ' + url);
     };
     botMsgs = [];
-    await preguntar("cual es el clima en Santa Cruz de la Sierra'?");
-    assert.ok(cuerpoApost && cuerpoApost.herramienta && cuerpoApost.herramienta.tipo === 'clima', 'apóstrofo final: se envía por la ruta clima');
-    assert.strictEqual(cuerpoApost.herramienta.ubicacion, 'Santa Cruz de la Sierra', 'apóstrofo final NUNCA viaja a Open-Meteo');
+    await preguntar('¿Podré salir mañana?');
+    assert.strictEqual(cuerpoSinUbicacion.ubicacionHabitual, undefined);
+    assert.strictEqual(cuerpoSinUbicacion.ubicacionDispositivo, undefined);
+    assert.ok(botMsgs.includes('¿En qué ciudad y país quieres consultar el clima?'));
+    assert.ok(NoMiState.historial.some(m => m.role === 'assistant' && m.content.includes('En qué ciudad')), 'la aclaración queda en contexto para la respuesta siguiente');
 
-    // ===== 3) Sin ciudad ni ubicación: el chat NoMi NO activa clima =====
+    // ===== 4) Fallo del proveedor: reintento sin forzar búsqueda web =====
     activarNoMi();
-    let llamadasChat3 = 0, cuerpoNormal = null;
-    responder = async (url, opts) => {
-        if (url.includes('/v1/chat')) { llamadasChat3++; cuerpoNormal = JSON.parse(opts.body); return { ok: true, respuesta: 'respuesta normal', busquedaProtocolo: 1 }; }
-        if (url.includes('/v1/usage')) return { periodo: '2026-08', cuota_mensual_invitado: 50, tokens_usados: 0, solicitudes_usadas: 1 };
-        throw new Error('inesperado en test 3: ' + url);
+    const contadorAntesProv = NoMiState.contadorPreguntas;
+    responder = async (url) => {
+        if (url.includes('/v1/chat')) return { ok: true, respuesta: 'No se pudo consultar el clima ahora. Reintenta.', climaEstado: 'fallo_proveedor', busquedaProtocolo: 1, herramientasProtocolo: 1 };
+        throw new Error('inesperado fallo clima: ' + url);
     };
     botMsgs = [];
-    await preguntar('que tal el clima hoy?');
-    assert.strictEqual(llamadasChat3, 1, 'consulta sin ciudad sigue el chat normal NoMi');
-    assert.ok(cuerpoNormal && !cuerpoNormal.herramienta, 'sin ciudad: NO se envía herramienta');
+    await preguntar('¿Necesitaré abrigo mañana en Tarija?');
+    assert.strictEqual(NoMiState.reintentarPregunta, '¿Necesitaré abrigo mañana en Tarija?');
+    assert.strictEqual(NoMiState.reintentarBusquedaForzada, false, 'reintentar clima no fuerza Tavily');
+    assert.strictEqual(NoMiState.estadoHud, 'sin_conexion');
+    assert.strictEqual(NoMiState.contadorPreguntas, contadorAntesProv);
 
-    // ===== 3b) Clima automático desactivado: la consulta sigue el chat NoMi normal sin herramienta =====
-    activarNoMi();
-    setClimaAutomatico(false);
-    let llamadasCtx = 0, cuerpoCtx = null;
-    responder = async (url, opts) => {
-        if (url.includes('/v1/chat')) { llamadasCtx++; cuerpoCtx = JSON.parse(opts.body); return { ok: true, respuesta: 'respuesta normal', busquedaProtocolo: 1 }; }
-        if (url.includes('/v1/usage')) return { periodo: '2026-08', cuota_mensual_invitado: 50, tokens_usados: 0, solicitudes_usadas: 1 };
-        throw new Error('inesperado en test 3b: ' + url);
-    };
-    botMsgs = [];
-    await preguntar('cual es el clima en Santa Cruz de la Sierra?');
-    assert.strictEqual(llamadasCtx, 1, 'con clima automático desactivado el chat NoMi responde');
-    assert.ok(cuerpoCtx && !cuerpoCtx.herramienta, 'desactivado: NO se envía herramienta de clima');
-    assert.strictEqual(getClimaAutomatico(), false, 'la preferencia desactivada queda persistida');
-    setClimaAutomatico(true);
-
-    // ===== 3c) Asignación directa: NoMiState.climaAutomatico = false =====
+    // ===== 4b) Preferencia apagada: no ofrece clima =====
     activarNoMi();
     NoMiState.climaAutomatico = false;
-    let llamadasDir = 0, cuerpoDir = null;
+    let cuerpoApagado = null;
     responder = async (url, opts) => {
-        if (url.includes('/v1/chat')) { llamadasDir++; cuerpoDir = JSON.parse(opts.body); return { ok: true, respuesta: 'respuesta normal', busquedaProtocolo: 1 }; }
-        if (url.includes('/v1/usage')) return { periodo: '2026-08', cuota_mensual_invitado: 50, tokens_usados: 0, solicitudes_usadas: 1 };
-        throw new Error('inesperado en test 3c: ' + url);
+        if (url.includes('/v1/chat')) { cuerpoApagado = JSON.parse(opts.body); return { ok: true, respuesta: 'respuesta normal', busquedaProtocolo: 1, herramientasProtocolo: 1 }; }
+        if (url.includes('/v1/usage')) return { periodo: '2026-09' };
+        throw new Error('inesperado preferencia apagada: ' + url);
     };
-    botMsgs = [];
-    await preguntar('cual es el clima en Santa Cruz de la Sierra?');
-    assert.strictEqual(llamadasDir, 1, 'con climaAutomatico=false (asignacion directa) responde el chat normal');
-    assert.ok(cuerpoDir && !cuerpoDir.herramienta, 'climaAutomatico=false directo: el cuerpo no contiene herramienta');
-
-    // ===== 3d) Red caída en clima: reintentarPregunta + reintento vuelve por clima =====
-    activarNoMi();
-    let llamadasRedClima = 0, cuerpoReintento = null;
-    responder = async () => { llamadasRedClima++; throw new Error('red caída'); };
-    botMsgs = [];
-    await preguntar('cual es el clima en Cochabamba?');
-    assert.strictEqual(llamadasRedClima, 1, 'clima intentó llamar al Worker');
-    assert.ok(botMsgs.some((m) => m.includes('Reintentar')), 'muestra mensaje humano de conexión');
-    assert.strictEqual(NoMiState.reintentarPregunta, 'cual es el clima en Cochabamba?', 'fallo de red en clima guarda la pregunta para Reintentar');
-    assert.strictEqual(NoMiState.estadoHud, 'sin_conexion', 'HUD refleja sin_conexion tras fallo de clima');
-    // Reintento explícito (botón "Reintentar" del HUD): debe volver a la ruta clima.
-    responder = async (url, opts) => {
-        if (url.includes('/v1/chat')) { cuerpoReintento = JSON.parse(opts.body); return { ok: true, respuesta: 'Clima en Cochabamba: 20°C.' }; }
-        if (url.includes('/v1/usage')) return { periodo: '2026-08', cuota_mensual_invitado: 50, tokens_usados: 0, solicitudes_usadas: 1 };
-        throw new Error('inesperado en reintento clima: ' + url);
-    };
-    await preguntar(NoMiState.reintentarPregunta);
-    assert.ok(cuerpoReintento && cuerpoReintento.herramienta && cuerpoReintento.herramienta.tipo === 'clima', 'reintento vuelve a la ruta clima');
-    assert.strictEqual(cuerpoReintento.herramienta.ubicacion, 'Cochabamba', 'reintento conserva la ubicación detectada');
-    assert.strictEqual(NoMiState.reintentarPregunta, '', 'el éxito del reintento limpia reintentarPregunta');
-
-    // ===== 3e) El input se limpia al enviar una consulta de clima =====
-    activarNoMi();
-    const inputClimaTest = document.getElementById('nomi-input');
-    assert.ok(inputClimaTest, 'existe #nomi-input');
-    responder = async (url, opts) => {
-        if (url.includes('/v1/chat')) return { ok: true, respuesta: 'ok' };
-        if (url.includes('/v1/usage')) return { periodo: '2026-08' };
-        throw new Error('inesperado en test 3e: ' + url);
-    };
-    inputClimaTest.value = 'habra lluvia en Oruro?';
-    await preguntar('habra lluvia en Oruro?');
-    assert.strictEqual(inputClimaTest.value, '', 'el input se limpia tras enviar una consulta de clima');
-
-    // ===== 3f) climaEstado='fallo_proveedor': fallo blando reintentable =====
-    activarNoMi();
-    let cuerpoProv = null;
-    responder = async (url, opts) => {
-        if (url.includes('/v1/chat')) { cuerpoProv = JSON.parse(opts.body); return { ok: true, respuesta: 'No se pudo consultar el clima ahora. Reintenta.', climaEstado: 'fallo_proveedor' }; }
-        if (url.includes('/v1/usage')) return { periodo: '2026-08', cuota_mensual_invitado: 50, tokens_usados: 0, solicitudes_usadas: 1 };
-        throw new Error('inesperado en test 3f: ' + url);
-    };
-    botMsgs = [];
-    const contadorAntesProv = NoMiState.contadorPreguntas;
-    await preguntar('cual es el clima en La Paz?');
-    assert.ok(cuerpoProv && cuerpoProv.herramienta && cuerpoProv.herramienta.tipo === 'clima', 'la consulta fue por la ruta clima');
-    assert.ok(botMsgs.some((m) => m.includes('No se pudo consultar el clima')), 'conserva el mensaje humano del Worker');
-    assert.strictEqual(NoMiState.reintentarPregunta, 'cual es el clima en La Paz?', 'fallo_proveedor ofrece Reintentar para la misma pregunta');
-    assert.strictEqual(NoMiState.estadoHud, 'sin_conexion', 'HUD sin_conexion en fallo_proveedor');
-    assert.strictEqual(NoMiState.contadorPreguntas, contadorAntesProv, 'fallo_proveedor NO cuenta como pregunta atendida');
-    assert.ok(!NoMiState.historial.some((m) => m.role === 'user'), 'la pregunta sale del historial (el reintento no la duplica)');
-    // Reintento con señal 'ok': se atiende como éxito normal.
-    responder = async () => ({ ok: true, respuesta: 'Clima en La Paz, Bolivia: 15°C.', climaEstado: 'ok' });
-    botMsgs = [];
-    await preguntar(NoMiState.reintentarPregunta);
-    assert.strictEqual(NoMiState.reintentarPregunta, '', 'el éxito limpia reintentarPregunta');
-    assert.strictEqual(NoMiState.contadorPreguntas, contadorAntesProv + 1, 'el éxito sí cuenta la pregunta');
-    assert.ok(botMsgs.some((m) => m.includes('Clima en La Paz')), 'reintento pinta la respuesta de clima');
-
-// ===== 4) Ubicación local habilitada: se usa como ubicación =====
-    activarNoMi();
-    NoMiState.ubicacionActivada = true;
-    NoMiState.ubicacionActual = { ciudad: 'Santa Cruz de la Sierra', pais: 'Bolivia', fuente: 'gps', timestamp: Date.now() };
-    let cuerpoUbic = null;
-    responder = async (url, opts) => {
-        if (url.includes('/v1/chat')) { cuerpoUbic = JSON.parse(opts.body); return { ok: true, respuesta: 'ok' }; }
-        if (url.includes('/v1/usage')) return { periodo: '2026-08' };
-        throw new Error('inesperado humano: ' + url);
-    };
-    botMsgs = [];
-    await preguntar('habra lluvia hoy?'); // no "en", pero hay ubicacion local
-    assert.ok(cuerpoUbic && cuerpoUbic.herramienta && cuerpoUbic.herramienta.tipo === 'clima', 'con ubicacion local si se activa el clima');
-    assert.ok(cuerpoUbic.herramienta.ubicacion.includes('Santa Cruz'), 'usa la ubicacion local: ' + cuerpoUbic.herramienta.ubicacion);
+    await preguntar('¿Necesitaré paraguas mañana?');
+    assert.strictEqual(cuerpoApagado.permitirClima, false);
 
     // ===== 5) Personal (openrouter): conserva su flujo y NO usa la ruta clima =====
     setModoAcceso(MODO_ACCESO_OPENROUTER);
@@ -336,7 +233,7 @@ const pruebas = `
     // Defensa SOLO en modo NoMi: la respuesta empieza por !search y NO se muestra.
     activarNoMi();
     responder = async (url, opts) => {
-        if (url.includes('/v1/chat')) return { ok: true, respuesta: '!search Resultado inventado de la web', busquedaProtocolo: 1 };
+        if (url.includes('/v1/chat')) return { ok: true, respuesta: '!search Resultado inventado de la web', busquedaProtocolo: 1, herramientasProtocolo: 1 };
         throw new Error('inesperado en defensa NoMi: ' + url);
     };
     await preguntar('dime algo sobre X');

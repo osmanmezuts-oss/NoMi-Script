@@ -20,7 +20,7 @@ const ALTO_POR_DEFECTO = 400;
 const UBICACION_EXPIRACION = 3 * 60 * 60 * 1000;
 const CONTEXTO_RECIENTE = 10;
 const DIAS_LIMITE_HISTORIAL = 7;
-const VERSION_SCRIPT = '5.19';
+const VERSION_SCRIPT = '5.20';
 const FECHA_LANZAMIENTO = '19/08/2026';
 
 const STORAGE_VALIDADO = 'nomi_validado';
@@ -40,6 +40,7 @@ const STORAGE_BUSQUEDA_WEB = 'nomi_busqueda_web';
 const STORAGE_TAMANO_VENTANA = 'nomi_tamano_ventana';
 const STORAGE_UBICACION = 'nomi_ubicacion';
 const STORAGE_UBICACION_ACTIVADA = 'nomi_ubicacion_activada';
+const STORAGE_UBICACION_HABITUAL = 'nomi_ubicacion_habitual';
 const STORAGE_CLIMA_AUTOMATICO = 'nomi_clima_automatico';
 const STORAGE_BUSQUEDA_WEB_NOMI = 'nomi_busqueda_web_nomi';
 const STORAGE_ERROR_LOGS = 'nomi_error_logs';

@@ -19,10 +19,9 @@ export const MODO_GROQ = Object.freeze({
     SINTESIS_BUSQUEDA: 'sintesis_busqueda',
 });
 
-// Única herramienta local ofrecida al modelo. El Worker ejecuta Tavily; Groq
-// solo decide si hace falta y genera una consulta autosuficiente. Los enums se
-// validan de nuevo en index.js antes de usarlos.
-export const HERRAMIENTAS_BUSQUEDA = Object.freeze([{
+// Herramientas locales. Groq decide por significado; el Worker valida todos los
+// argumentos y ejecuta los proveedores. Nunca se depende de palabras clave.
+export const HERRAMIENTA_BUSQUEDA = Object.freeze({
     type: 'function',
     function: {
         name: 'busqueda_web',
@@ -51,12 +50,42 @@ export const HERRAMIENTAS_BUSQUEDA = Object.freeze([{
             additionalProperties: false,
         },
     },
-}]);
+});
 
-// Presupuesto conservador del schema enviado al proveedor. index.js lo suma a
-// la reserva de la primera llamada para no ocultar su costo bajo el límite TPM.
-export const HERRAMIENTAS_BUSQUEDA_TOKENS = new TextEncoder()
-    .encode(JSON.stringify(HERRAMIENTAS_BUSQUEDA)).length;
+export const HERRAMIENTA_CLIMA = Object.freeze({
+    type: 'function',
+    function: {
+        name: 'consultar_clima',
+        description: 'Consulta un pronóstico meteorológico real. Úsala cuando la intención sea saber condiciones, riesgos o conveniencia meteorológica, aunque el usuario no diga clima. Resuelve hoy, mañana o fechas relativas con el anclaje local incluido en el mensaje. No inventes una ubicación: omítela si no fue mencionada.',
+        parameters: {
+            type: 'object',
+            properties: {
+                ubicacion: {
+                    type: 'string',
+                    minLength: 2,
+                    maxLength: 120,
+                    description: 'Lugar mencionado por el usuario. Omite este campo si no mencionó uno; el Worker aplicará la ubicación habitual o del dispositivo.',
+                },
+                fecha: {
+                    type: 'string',
+                    description: 'Fecha local exacta solicitada en formato YYYY-MM-DD, resuelta desde la fecha y zona horaria del contexto.',
+                },
+            },
+            required: ['fecha'],
+            additionalProperties: false,
+        },
+    },
+});
+
+export const HERRAMIENTAS_BUSQUEDA = Object.freeze([HERRAMIENTA_BUSQUEDA]);
+
+export function crearHerramientasNoMi({ permitirBusqueda, permitirClima, forzarBusqueda } = {}) {
+    if (forzarBusqueda === true) return [HERRAMIENTA_BUSQUEDA];
+    const herramientas = [];
+    if (permitirBusqueda === true) herramientas.push(HERRAMIENTA_BUSQUEDA);
+    if (permitirClima === true) herramientas.push(HERRAMIENTA_CLIMA);
+    return herramientas;
+}
 
 function sistemaParaModo(modo) {
     if (modo === MODO_GROQ.DECISION_BUSQUEDA || modo === MODO_GROQ.BUSQUEDA_FORZADA) return SISTEMA_CON_BUSQUEDA;
@@ -66,7 +95,7 @@ function sistemaParaModo(modo) {
 
 // Llama a Groq. Devuelve { texto, usage } con usage del proveedor.
 // Lanza E.proveedorNoDisponible en fallo de red o 5xx; E.parametrosInvalidos en 4xx.
-export async function llamarGroq(env, { modelo, mensajes, max_tokens, modo = MODO_GROQ.NORMAL }) {
+export async function llamarGroq(env, { modelo, mensajes, max_tokens, modo = MODO_GROQ.NORMAL, herramientas = [] }) {
     // Mensajes completos con la instrucción de sistema al inicio (sin duplicar si
     // ya viniera una; el handler solo envía un mensaje de usuario).
     const mensajesCompletos = [{ role: 'system', content: sistemaParaModo(modo) }, ...(mensajes || [])];
@@ -83,7 +112,7 @@ export async function llamarGroq(env, { modelo, mensajes, max_tokens, modo = MOD
         cuerpo.reasoning_format = 'hidden';
     }
     if (modo === MODO_GROQ.DECISION_BUSQUEDA || modo === MODO_GROQ.BUSQUEDA_FORZADA) {
-        cuerpo.tools = HERRAMIENTAS_BUSQUEDA;
+        cuerpo.tools = Array.isArray(herramientas) && herramientas.length ? herramientas : HERRAMIENTAS_BUSQUEDA;
         cuerpo.tool_choice = modo === MODO_GROQ.BUSQUEDA_FORZADA
             ? { type: 'function', function: { name: 'busqueda_web' } }
             : 'auto';

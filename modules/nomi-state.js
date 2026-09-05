@@ -28,6 +28,7 @@ window.NoMiState = {
     tamanoVentana: { w: ANCHO_POR_DEFECTO, h: ALTO_POR_DEFECTO },
     busquedaForzada: false,
     ubicacionActual: null,
+    ubicacionHabitual: '',
     fuenteUbicacion: 'desconocida',
     credencialesCargadas: false,
     apiKeyActual: '',

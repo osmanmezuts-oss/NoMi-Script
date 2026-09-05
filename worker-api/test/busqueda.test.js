@@ -362,7 +362,7 @@ test('decisión semántica: chat estable responde con una Groq y cero Tavily', a
     assert.equal(estado.groq[0].tool_choice, 'auto');
     assert.equal(estado.groq[0].parallel_tool_calls, false);
     assert.equal(estado.groq[0].tools[0].function.name, 'busqueda_web');
-    assert.match(estado.groq[0].messages[0].content, /significado y el contexto/i, 'la decisión no depende de palabras clave');
+    assert.match(estado.groq[0].messages[0].content, /significado, la intención y el contexto/i, 'la decisión no depende de palabras clave');
     assert.match(estado.groq[0].messages[0].content, /datos no confiables/i, 'historial y página no pueden inyectar instrucciones');
     const usuario = await db.buscarPorToken(token);
     assert.equal((await db.obtenerUso(usuario.id)).solicitudes, 1, 'una petición Groq contabilizada');

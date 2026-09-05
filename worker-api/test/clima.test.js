@@ -46,23 +46,61 @@ function instalarFetchOpenMeteo(estado = {}) {
         if (u.includes('api.open-meteo.com')) {
             if (estado.forecastError) return new Response('err', { status: 500 });
             if (estado.forecastLanza) throw new Error('red caída');
-            return new Response(JSON.stringify(estado.forecast || {
-                current: { temperature_2m: 25.3, weather_code: 1, wind_speed_10m: 12.0 },
-                daily: {
-                    time: ['2026-08-21'],
-                    weather_code: [1],
-                    temperature_2m_max: [30.0],
-                    temperature_2m_min: [18.0],
-                    precipitation_probability_max: [10],
-                },
-            }), { status: 200, headers: { 'content-type': 'application/json' } });
+            return new Response(JSON.stringify(estado.forecast || forecastDia(diaActual())), { status: 200, headers: { 'content-type': 'application/json' } });
         }
         // Cualquier otra URL (p. ej. Groq) no debe llamarse en la ruta de clima.
         throw new Error('URL inesperada en ruta de clima: ' + u);
     };
 }
 
+function forecastDia(fecha, { lluvia = 35 } = {}) {
+    const horas = Array.from({ length: 24 }, (_, h) => `${fecha}T${String(h).padStart(2, '0')}:00`);
+    return {
+        timezone: 'America/La_Paz',
+        hourly: {
+            time: horas,
+            temperature_2m: horas.map((_, h) => h < 12 ? 19 + h / 3 : 31 - (h - 12) / 2),
+            precipitation_probability: horas.map((_, h) => h >= 12 && h <= 17 ? lluvia : 10),
+            weather_code: horas.map((_, h) => h >= 12 && h <= 17 && lluvia >= 40 ? 61 : 1),
+            wind_speed_10m: horas.map(() => 12),
+        },
+        daily: {
+            time: [fecha], weather_code: [1], temperature_2m_max: [31],
+            temperature_2m_min: [18], precipitation_probability_max: [lluvia],
+        },
+    };
+}
+
 const GEO_OK = { geoResults: [{ name: 'Santa Cruz de la Sierra', country: 'Bolivia', country_code: 'BO', latitude: -17.78, longitude: -63.18 }] };
+
+function toolClima(argumentos) {
+    return [{ id: 'call_clima_1', type: 'function', function: { name: 'consultar_clima', arguments: JSON.stringify(argumentos) } }];
+}
+
+function instalarFetchClimaSemantico({ argumentos, fechaForecast = '2026-09-05' } = {}) {
+    const estado = { groq: [], geocoding: [], forecast: [] };
+    globalThis.fetch = async (url, opts = {}) => {
+        const u = String(url);
+        if (u.includes('groq.com')) {
+            const cuerpo = JSON.parse(opts.body || '{}');
+            estado.groq.push(cuerpo);
+            return new Response(JSON.stringify({
+                choices: [{ message: { content: null, tool_calls: toolClima(argumentos || { fecha: fechaForecast }) }, finish_reason: 'tool_calls' }],
+                usage: { total_tokens: 24, prompt_tokens: 18, completion_tokens: 6 },
+            }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        if (u.includes('geocoding-api.open-meteo.com')) {
+            estado.geocoding.push(u);
+            return new Response(JSON.stringify({ results: GEO_OK.geoResults }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        if (u.includes('api.open-meteo.com')) {
+            estado.forecast.push(u);
+            return new Response(JSON.stringify(forecastDia(fechaForecast, { lluvia: 65 })), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        throw new Error('URL inesperada en clima semántico: ' + u);
+    };
+    return estado;
+}
 
 test('clima NoMi devuelve respuesta breve sin Groq', async () => {
     const env = envNuevo();
@@ -76,12 +114,15 @@ test('clima NoMi devuelve respuesta breve sin Groq', async () => {
     const data = await r.json();
     assert.equal(data.ok, true);
     assert.equal(data.climaEstado, 'ok', 'señal explícita de clima correcto');
-    assert.ok(data.respuesta.includes('Clima en Santa Cruz de la Sierra'), 'debe resolver la ciudad');
+    assert.ok(data.respuesta.includes('en Santa Cruz de la Sierra'), 'debe resolver la ciudad');
     assert.ok(data.respuesta.includes('°C'), 'debe incluir temperatura');
-    assert.ok(/máx \d+°C \/ mín \d+°C/.test(data.respuesta), 'debe incluir máx/mín del día');
-    // 2–4 líneas, determinista, sin relleno semanal.
+    assert.match(data.respuesta, /Mañana \(06–11\):/);
+    assert.match(data.respuesta, /Tarde \(12–17\):/);
+    assert.match(data.respuesta, /Noche \(18–23\):/);
+    assert.match(data.respuesta, /Recomendación:/);
+    // Cinco líneas deterministas: conclusión + tres franjas + recomendación.
     const lineas = data.respuesta.split('\n').filter(l => l.trim().length > 0);
-    assert.ok(lineas.length >= 2 && lineas.length <= 4, 'respuesta de 2–4 líneas: ' + JSON.stringify(lineas));
+    assert.equal(lineas.length, 5, 'respuesta de cinco líneas: ' + JSON.stringify(lineas));
     assert.ok(!/semana/i.test(data.respuesta), 'sin pronóstico semanal');
     // No consumió cuota mensual de Groq (la ruta no toca uso_mensual).
     const usuario = await db.buscarPorToken(token);
@@ -109,10 +150,7 @@ test('geocoding no recibe el apóstrofo final y conserva los apóstrofes interno
             return new Response(JSON.stringify({ results: [{ name: 'Santa Cruz de la Sierra', country: 'Bolivia', country_code: 'BO', latitude: -17.78, longitude: -63.18 }] }), { status: 200, headers: { 'content-type': 'application/json' } });
         }
         if (u.includes('api.open-meteo.com')) {
-            return new Response(JSON.stringify({
-                current: { temperature_2m: 25.3, weather_code: 1, wind_speed_10m: 12.0 },
-                daily: { time: ['2026-08-21'], weather_code: [1], temperature_2m_max: [30.0], temperature_2m_min: [18.0], precipitation_probability_max: [10] },
-            }), { status: 200, headers: { 'content-type': 'application/json' } });
+            return new Response(JSON.stringify(forecastDia(diaActual())), { status: 200, headers: { 'content-type': 'application/json' } });
         }
         throw new Error('URL inesperada en ruta de clima: ' + u);
     };
@@ -195,7 +233,7 @@ test('fallo de Open-Meteo NO consume el cupo diario de clima', async () => {
         body: { herramienta: { tipo: 'clima', ubicacion: 'Santa Cruz de la Sierra' } },
     });
     assert.equal(r2.status, 200);
-    assert.ok((await r2.json()).respuesta.includes('Clima en'), 'reintento tras fallo usa cupo normal');
+    assert.ok((await r2.json()).respuesta.includes('Santa Cruz de la Sierra'), 'reintento tras fallo usa cupo normal');
 });
 
 test('límite diario: 20 permitidas, 21 rechazada; aislado de cuota/bolsa DO', async () => {
@@ -248,6 +286,84 @@ test('WMO 67 mapea a lluvia helada fuerte', async () => {
     assert.strictEqual(cond, 'lluvia helada fuerte', 'WMO 67 → lluvia helada fuerte');
     // Assertion mínima directa sobre el mapeo WMO (tarea 3).
     assert.strictEqual(_internosClima.CONDICIONES_WMO[67], 'lluvia helada fuerte', 'mapeo directo WMO 67 → lluvia helada fuerte');
+});
+
+test('clima semántico resuelve mañana sin regex y devuelve el día completo', async () => {
+    const env = envNuevo();
+    const { token } = await crearInvitado(env);
+    const estado = instalarFetchClimaSemantico({
+        argumentos: { ubicacion: 'Santa Cruz de la Sierra, Bolivia', fecha: '2026-09-05' },
+        fechaForecast: '2026-09-05',
+    });
+    const r = await llamar(env, '/v1/chat', {
+        metodo: 'POST', token,
+        body: {
+            modelo: 'openai/gpt-oss-20b',
+            mensaje: '📅 2026-09-04 21:00 (America/La_Paz, UTC-04:00)\n\nPregunta del usuario: ¿Necesitaré paraguas al salir mañana en Santa Cruz de la Sierra?',
+            permitirClima: true,
+            contextoTemporal: { fecha: '2026-09-04', hora: '21:00', zona: 'America/La_Paz', offset: 'UTC-04:00' },
+        },
+    });
+    const data = await r.json();
+    assert.equal(data.climaEstado, 'ok');
+    assert.equal(data.herramientasProtocolo, 1);
+    assert.match(data.respuesta, /^Mañana, 5 de septiembre, en Santa Cruz de la Sierra, Bolivia \(horario local\):/);
+    assert.match(data.respuesta, /Mañana \(06–11\):/);
+    assert.match(data.respuesta, /Tarde \(12–17\):/);
+    assert.match(data.respuesta, /Noche \(18–23\):/);
+    assert.match(data.respuesta, /paraguas o impermeable/i);
+    assert.ok(estado.groq[0].tools.some(t => t.function.name === 'consultar_clima'), 'Groq recibe la herramienta climática');
+    assert.match(estado.forecast[0], /start_date=2026-09-05/);
+    assert.match(estado.forecast[0], /end_date=2026-09-05/);
+    assert.doesNotMatch(data.respuesta, /Ahora:|Hoy:/, 'mañana no mezcla condiciones actuales ni de hoy');
+});
+
+test('prioridad de ubicación: explícita, habitual, dispositivo y pregunta única', async () => {
+    for (const caso of [
+        { args: { ubicacion: 'Tarija, Bolivia', fecha: '2026-09-05' }, habitual: 'Cochabamba, Bolivia', dispositivo: 'La Paz, Bolivia', esperada: 'Tarija, Bolivia' },
+        { args: { fecha: '2026-09-05' }, habitual: 'Cochabamba, Bolivia', dispositivo: 'La Paz, Bolivia', esperada: 'Cochabamba, Bolivia' },
+        { args: { fecha: '2026-09-05' }, habitual: '', dispositivo: 'La Paz, Bolivia', esperada: 'La Paz, Bolivia' },
+    ]) {
+        const env = envNuevo();
+        const { token } = await crearInvitado(env);
+        const estado = instalarFetchClimaSemantico({ argumentos: caso.args });
+        const r = await llamar(env, '/v1/chat', { metodo: 'POST', token, body: {
+            modelo: 'openai/gpt-oss-20b', mensaje: 'Pregunta del usuario: ¿Podré salir mañana?', permitirClima: true,
+            contextoTemporal: { fecha: '2026-09-04', hora: '21:00', zona: 'America/La_Paz', offset: 'UTC-04:00' },
+            ubicacionHabitual: caso.habitual, ubicacionDispositivo: caso.dispositivo,
+        } });
+        assert.equal((await r.json()).climaEstado, 'ok');
+        assert.ok(decodeURIComponent(estado.geocoding[0]).includes(caso.esperada), `usa ${caso.esperada}`);
+    }
+
+    const env = envNuevo();
+    const { token, db } = await crearInvitado(env);
+    const estado = instalarFetchClimaSemantico({ argumentos: { fecha: '2026-09-05' } });
+    const r = await llamar(env, '/v1/chat', { metodo: 'POST', token, body: {
+        modelo: 'openai/gpt-oss-20b', mensaje: 'Pregunta del usuario: ¿Podré salir mañana?', permitirClima: true,
+        contextoTemporal: { fecha: '2026-09-04', hora: '21:00', zona: 'America/La_Paz', offset: 'UTC-04:00' },
+    } });
+    const data = await r.json();
+    assert.equal(data.climaEstado, 'falta_ubicacion');
+    assert.equal(data.respuesta, '¿En qué ciudad y país quieres consultar el clima?');
+    assert.equal(estado.geocoding.length, 0, 'sin ubicación no llama a Open-Meteo');
+    const usuario = await db.buscarPorToken(token);
+    assert.equal(await db.contarConsultasClima(usuario.id, diaActual()), 0, 'preguntar ciudad no consume cupo climático');
+});
+
+test('una herramienta clima no habilitada nunca se ejecuta', async () => {
+    const env = envNuevo();
+    const { token } = await crearInvitado(env);
+    const estado = instalarFetchClimaSemantico({ argumentos: { ubicacion: 'Tarija, Bolivia', fecha: '2026-09-05' } });
+    const r = await llamar(env, '/v1/chat', { metodo: 'POST', token, body: {
+        modelo: 'openai/gpt-oss-20b', mensaje: 'Pregunta del usuario: consulta cualquiera',
+        permitirBusqueda: true, permitirClima: false,
+        contextoTemporal: { fecha: '2026-09-04', hora: '21:00', zona: 'America/La_Paz', offset: 'UTC-04:00' },
+    } });
+    const data = await r.json();
+    assert.equal(data.busquedaEstado, 'consulta_invalida');
+    assert.equal(estado.geocoding.length, 0);
+    assert.equal(estado.forecast.length, 0);
 });
 
 test('chat normal sin herramienta sigue vía Groq (no clima)', async () => {

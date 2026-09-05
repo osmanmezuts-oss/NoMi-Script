@@ -55,7 +55,7 @@ en el repositorio; solo referencia nombres de secretos/bindings.
 | POST | `/v1/activate` | Canjear invitación, devuelve token opaco |
 | GET | `/v1/catalog` | Catálogo de modelos (sin credenciales) |
 | GET | `/v1/usage` | Uso/cuota del invitado autenticado |
-| POST | `/v1/chat` | Chat vía Groq (modelo allowlist), decisión semántica opcional de búsqueda web, o ruta directa de clima |
+| POST | `/v1/chat` | Chat vía Groq (modelo allowlist) con decisión semántica opcional de búsqueda web y clima |
 | POST | `/admin/invitacion` | Crear invitación (requiere `ADMIN_SECRET`); acepta `etiqueta` opcional |
 | GET | `/admin/invitaciones` | Listar invitaciones (estado, id, fechas, etiqueta, usuario vinculado) |
 | POST | `/admin/revocar` | Revocar invitación por `id` (transaccional) |
@@ -91,23 +91,35 @@ códigos, hashes ni tokens de instalación.
 
 ## Herramientas de `/v1/chat`
 
-Clima y la ruta de búsqueda directa heredada reciben `herramienta` y no pasan
-por Groq. Cada herramienta externa tiene un contador diario propio en D1
-(atómico por usuario+día UTC, tope 20) y una señal explícita de resultado.
+El cliente actual ofrece herramientas al modelo para que decida por intención y
+contexto, sin comandos ni palabras obligatorias. Las rutas directas con
+`herramienta` se conservan solo para bundles anteriores. Cada proveedor externo
+tiene un contador diario propio en D1 (atómico por usuario+día UTC, tope 20).
 
-### Clima — Open-Meteo (`herramienta.tipo = "clima"`)
-- Cuerpo: `{ "tipo": "clima", "ubicacion": "<2–120 chars tras trim>" }`.
-- Geocoding + forecast actual de Open-Meteo; respuesta breve en español.
-- Estados (`climaEstado`): `ok` · `ciudad_no_encontrada` · `fallo_proveedor`.
+### Clima semántico — Groq + Open-Meteo
+- El cliente envía `permitirClima`, un anclaje local estructurado
+  (`fecha`, `hora`, zona IANA y offset) y fallbacks opcionales de ubicación.
+- Groq recibe `consultar_clima` y decide por significado/contexto. Devuelve la
+  fecha exacta `YYYY-MM-DD` y solo la ubicación explícita del usuario.
+- Prioridad del Worker: ubicación explícita → habitual configurable → dispositivo;
+  si ninguna existe, pregunta una vez sin consumir cupo climático.
+- Open-Meteo recibe la fecha exacta mediante `start_date/end_date`. La respuesta
+  determinista contiene conclusión, mañana (06–11), tarde (12–17), noche
+  (18–23) y una recomendación práctica; una fecha futura nunca mezcla “ahora”.
+- Estados (`climaEstado`): `ok` · `falta_ubicacion` · `ciudad_no_encontrada` ·
+  `limite_diario` · `fallo_proveedor` · `consulta_invalida`.
 - Un fallo del proveedor **revierte** el cupo diario; una ciudad no encontrada lo
   consume (la petición llegó al proveedor).
+- Compatibilidad: `{ "tipo": "clima", "ubicacion": "...", "fecha": "YYYY-MM-DD" }`
+  continúa disponible para bundles anteriores.
 
 ### Búsqueda web semántica — Groq + Tavily SOLO en el Worker
 - El cliente actual envía chat normal con `permitirBusqueda: true|false`; nunca
   decide por palabras clave ni envía una consulta Tavily construida localmente.
 - La lupa puede enviar además `forzarBusqueda: true`: el Worker obliga una única
   llamada a `busqueda_web`, incluso si la preferencia automática estaba apagada.
-- Con `true`, la primera llamada Groq recibe únicamente `busqueda_web` y decide
+- Con `true`, la primera llamada Groq recibe `busqueda_web` (y también
+  `consultar_clima` si esa preferencia está activa) y decide
   por significado/contexto si necesita datos actuales o verificables. Un
   seguimiento debe convertir referencias como “esas noticias” en una consulta
   autosuficiente con tema, lugar y periodo.
@@ -145,7 +157,7 @@ por Groq. Cada herramienta externa tiene un contador diario propio en D1
 - Worker nuevo + bundle anterior: la ruta directa `herramienta.tipo="busqueda"`
   sigue funcionando.
 - Bundle nuevo + Worker anterior: si se habilitó o forzó búsqueda, el cliente
-  detecta que falta `busquedaProtocolo: 1` y muestra que el servidor debe
+  detecta que falta `herramientasProtocolo: 1` y muestra que el servidor debe
   actualizarse; no presenta una respuesta no verificada como información actual.
   Por eso el Worker debe desplegarse primero.
 
@@ -164,7 +176,7 @@ semántica.
    solo se necesita para la búsqueda web NoMi.
 3. Desplegar el Worker: `npx wrangler deploy` (desde `worker-api/`).
 4. Solo después, distribuir el bundle generado (`NoMi Asistente V5.8.user.js`,
-   versión 5.17), que ya incluye el permiso de búsqueda semántica.
+   versión 5.20), que ya incluye búsqueda y clima semánticos.
 
 El Durable Object ya está declarado en `wrangler.toml` (`RATE_LIMITER`).
 

@@ -255,23 +255,24 @@ const pruebas = `
     const contadorAntesWorkerViejo = NoMiState.contadorPreguntas;
     conUso(async () => ({ ok: true, respuesta: 'Dato actual no verificable del Worker viejo.' }));
     await preguntar('¿Qué cambió hoy en el municipio?');
-    assert.ok(botMsgs.some(m => m.includes('necesita actualizar el servidor')), 'degradación explícita por versión');
+    assert.ok(botMsgs.some(m => /necesita[n]? actualizar el servidor/.test(m)), 'degradación explícita por versión');
     assert.ok(!botMsgs.some(m => m.includes('Dato actual no verificable')), 'no muestra el dato no verificable');
     assert.strictEqual(NoMiState.reintentarPregunta, '', 'actualizar Worker no es un fallo reintentable');
     assert.strictEqual(NoMiState.contadorPreguntas, contadorAntesWorkerViejo, 'una respuesta no verificable no cuenta como atendida');
 
-    // 4) El clima conserva prioridad y su ruta especializada sin tool loop web.
+    // 4) La lupa es una orden explícita de búsqueda: deshabilita clima solo en
+    // ese envío; el cliente nunca extrae ciudad ni construye herramienta clima.
     activarNoMi();
     NoMiState.busquedaForzada = true;
     let cuerpoClima = null;
     conUso(async (url, opts) => {
         cuerpoClima = JSON.parse(opts.body);
-        return { ok: true, respuesta: 'Clima en La Paz: 18 °C.', climaEstado: 'ok' };
+        return { ok: true, respuesta: 'Información web verificada [1].', busquedaEstado: 'ok', busquedaProtocolo: 1, herramientasProtocolo: 1, fuentes: [] };
     });
     await preguntar('busca el clima en La Paz hoy');
-    assert.strictEqual(cuerpoClima.herramienta.tipo, 'clima');
-    assert.strictEqual(cuerpoClima.herramienta.ubicacion, 'La Paz');
-    assert.strictEqual(cuerpoClima.permitirBusqueda, undefined);
+    assert.strictEqual(cuerpoClima.herramienta, undefined);
+    assert.strictEqual(cuerpoClima.forzarBusqueda, true);
+    assert.strictEqual(cuerpoClima.permitirClima, false);
     assert.strictEqual(NoMiState.busquedaForzada, false, 'la lupa no se filtra a la pregunta posterior si clima gana');
 
     // 5) Fallo Tavily es reintentable; estados definitivos no lo son.
@@ -387,7 +388,13 @@ const pruebas = `
 
 const combinado = fuentes.join('\n') + '\n' + `
 let responder = async (url, opts) => { throw new Error('no hay mock para ' + url); };
-hacerPeticion = async (url, opts) => { return await responder(url, opts); };
+hacerPeticion = async (url, opts) => {
+    const datos = await responder(url, opts);
+    // Los fixtures de búsqueda anteriores al contrato climático representan al
+    // Worker actual; completa únicamente la señal común para evitar repetirla.
+    if (datos && datos.busquedaProtocolo === 1 && datos.herramientasProtocolo === undefined) datos.herramientasProtocolo = 1;
+    return datos;
+};
 ` + pruebas;
 
 vm.runInContext(combinado, ctx, { filename: 'nomi-busqueda-test.js' });
@@ -400,7 +407,7 @@ assert.ok(!/TAVILY_API_KEY/.test(bundle), 'el bundle nunca contiene TAVILY_API_K
 assert.ok(!/function detectarBusquedaNoMi/.test(bundle), 'bundle sin detector léxico NoMi');
 assert.ok(/permitirBusqueda/.test(bundle), 'bundle incluye el contrato semántico');
 assert.ok(/forzarBusqueda/.test(bundle), 'bundle conserva la lupa como búsqueda obligatoria vía Worker');
-assert.ok(/busquedaProtocolo/.test(bundle), 'bundle detecta versiones antiguas del Worker');
+assert.ok(/herramientasProtocolo/.test(bundle), 'bundle detecta versiones antiguas del Worker para búsqueda y clima');
 assert.ok(/su asistente virtual\./.test(bundle), 'saludo inicial femenino');
 assert.ok(/Estoy dise[ñn]ada/.test(bundle), 'identidad femenina preservada');
 console.log('OK: cabecera y bundle verificados (sin secretos, identidad femenina, búsqueda semántica)');

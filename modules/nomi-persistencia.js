@@ -81,6 +81,15 @@ function getTamanoVentana() { return getValor(STORAGE_TAMANO_VENTANA, { w: ANCHO
 function setTamanoVentana(t) { setValor(STORAGE_TAMANO_VENTANA, t); NoMiState.tamanoVentana = t; }
 function getUbicacionActivada() { return getValor(STORAGE_UBICACION_ACTIVADA, false); }
 function setUbicacionActivada(v) { setValor(STORAGE_UBICACION_ACTIVADA, v); NoMiState.ubicacionActivada = v; }
+function getUbicacionHabitual() {
+    return String(getValor(STORAGE_UBICACION_HABITUAL, '') || '').trim().slice(0, 120);
+}
+function setUbicacionHabitual(v) {
+    const ubicacion = String(v || '').trim().slice(0, 120);
+    if (ubicacion) setValor(STORAGE_UBICACION_HABITUAL, ubicacion);
+    else eliminarValor(STORAGE_UBICACION_HABITUAL);
+    NoMiState.ubicacionHabitual = ubicacion;
+}
 // Preferencia independiente "clima automático NoMi": desactivable desde
 // Configuración aunque no haya API Personal/Tavily. Por defecto activada.
 function getClimaAutomatico() { const v = getValor(STORAGE_CLIMA_AUTOMATICO, null); return v === null ? true : !!v; }

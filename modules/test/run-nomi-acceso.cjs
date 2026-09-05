@@ -59,6 +59,7 @@ const ctx = {
     cargarHistorial: () => {},
     // Auxiliares usados por preguntar() que viven en otros módulos (utilities/chat/etc.).
     obtenerContextoTiempo: () => 'Fecha: 2026-08-19',
+    obtenerAnclajeTemporal: () => ({ fecha: '2026-08-19', hora: '12:00', zona: 'America/La_Paz', offset: 'UTC-04:00' }),
     extraerInformacionPagina: () => ({ titulo: 'Ejemplo', url: 'https://example.com', metaDesc: '', encabezados: [], texto: '' }),
     requiereBusqueda: () => false,
     setContador: () => {},
@@ -377,7 +378,7 @@ hacerPeticion = async (url, opts) => {
     NoMiState.historial = [];
     let llamadasWorker = 0, llamadasOpenRouter = 0;
     responder = async (url, opts) => {
-        if (url.includes('/v1/chat')) { llamadasWorker++; return { ok: true, respuesta: 'respuesta NoMi' }; }
+        if (url.includes('/v1/chat')) { llamadasWorker++; return { ok: true, respuesta: 'respuesta NoMi', busquedaProtocolo: 1, herramientasProtocolo: 1 }; }
         if (url.includes('/v1/usage')) return { periodo: '2026-08', cuota_mensual_invitado: 50, solicitudes_usadas: 2, bolsa_global_disponible: 999, tokens_usados: 10 };
         if (url.includes('openrouter') || url.includes('/chat/completions')) { llamadasOpenRouter++; return { choices: [{ message: { content: 'x' } }] }; }
         throw new Error('inesperado: ' + url);

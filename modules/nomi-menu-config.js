@@ -140,7 +140,7 @@ function mostrarMenu() {
         document.createTextNode('🌦️ Clima automático NoMi'),
         nomiCrearNodo('input', { id: 'nomi-check-clima-nomi', marcado: getClimaAutomatico(), atributos: { type: 'checkbox' } })
     ]}));
-    filaClimaAuto.appendChild(nomiCrearNodo('div', { css: 'font-size:10px;color:#888;margin-top:2px;', texto: 'Detecta consultas de clima en modo NoMi sin Tavily ni API Personal. Desactívalo para enviarlas por el chat normal.' }));
+    filaClimaAuto.appendChild(nomiCrearNodo('div', { css: 'font-size:10px;color:#888;margin-top:2px;', texto: 'El modelo reconoce la intención meteorológica por significado y consulta Open-Meteo desde NoMi. No exige comandos ni palabras concretas.' }));
     secNomi.appendChild(filaClimaAuto);
 
     // Preferencia independiente "Búsqueda web NoMi": Tavily SOLO en el Worker,
@@ -159,6 +159,12 @@ function mostrarMenu() {
         nomiCrearNodo('input', { id: 'nomi-check-ubicacion', marcado: NoMiState.ubicacionActivada, atributos: { type: 'checkbox' } })
     ]}));
     secUbi.appendChild(nomiCrearNodo('div', { css: 'font-size:11px;color:#888;', texto: 'Permite a NoMi conocer su ubicación para respuestas más precisas (clima, eventos, etc.).' }));
+    secUbi.appendChild(nomiCrearNodo('label', { css: 'font-size:11px;color:#aaa;display:block;margin-top:7px;', texto: 'Ciudad habitual (opcional)' }));
+    secUbi.appendChild(nomiCrearNodo('div', { css: 'display:flex;gap:5px;margin-top:3px;', hijos: [
+        nomiCrearNodo('input', { id: 'nomi-input-ubicacion-habitual', valor: getUbicacionHabitual(), atributos: { type: 'text', maxlength: '120', placeholder: 'Santa Cruz de la Sierra, Bolivia' }, css: 'flex:1;min-width:0;padding:6px;border-radius:6px;border:1px solid #555;background:#0d0d1a;color:#fff;font-size:11px;' }),
+        nomiCrearNodo('button', { id: 'nomi-guardar-ubicacion-habitual', css: 'padding:6px 8px;background:#4a6cf7;border:none;border-radius:6px;color:#fff;font-size:11px;cursor:pointer;', texto: 'Guardar' })
+    ]}));
+    secUbi.appendChild(nomiCrearNodo('div', { css: 'font-size:10px;color:#777;margin-top:3px;', texto: 'Se usa solo cuando la consulta no menciona otro lugar. Déjalo vacío para usar la ubicación del dispositivo o preguntar.' }));
 
     const secLig = nomiCrearNodo('div', { css: 'margin-bottom:12px;' });
     secLig.appendChild(nomiCrearNodo('label', { css: 'display:flex;justify-content:space-between;align-items:center;font-size:14px;', hijos: [
@@ -452,6 +458,13 @@ function mostrarMenu() {
         actualizarBarraUbicacion();
         menu.remove();
     };
+    document.getElementById('nomi-guardar-ubicacion-habitual').onclick = () => {
+        const inputHabitual = document.getElementById('nomi-input-ubicacion-habitual');
+        setUbicacionHabitual(inputHabitual ? inputHabitual.value : '');
+        mostrarNotificacionTemporal(NoMiState.ubicacionHabitual
+            ? `📍 Ubicación habitual guardada: ${NoMiState.ubicacionHabitual}`
+            : '📍 Ubicación habitual eliminada.');
+    };
     document.getElementById('nomi-menu-limpiar').onclick = () => {
         if (confirm('¿Eliminar todos los historiales de más de 7 días? Esta acción no se puede deshacer.')) {
             const resultado = limpiarHistorialesAntiguos();
@@ -488,7 +501,7 @@ function mostrarMenu() {
                 if (key.startsWith('nomi_')) {
                     if (checks[0] && key.startsWith('nomi_historial_')) keysToRemove.push(key);
                     else if (checks[1] && [STORAGE_CONTEXTO, STORAGE_MODO_LIGERO, STORAGE_MODO_RESUMEN, STORAGE_BUSQUEDA_WEB, STORAGE_TAMANO_VENTANA, STORAGE_VALIDADO, STORAGE_API_KEY, STORAGE_MODELO, STORAGE_URL].includes(key)) keysToRemove.push(key);
-                    else if (checks[2] && (key === STORAGE_UBICACION || key === STORAGE_UBICACION_ACTIVADA)) keysToRemove.push(key);
+                    else if (checks[2] && (key === STORAGE_UBICACION || key === STORAGE_UBICACION_ACTIVADA || key === STORAGE_UBICACION_HABITUAL)) keysToRemove.push(key);
                     else if (checks[3] && key === STORAGE_ERROR_LOGS) keysToRemove.push(key);
                     else if (checks[4] && (key === STORAGE_POSICION || key === STORAGE_POSICION_VENTANA)) keysToRemove.push(key);
                     else if (checks[5] && [STORAGE_TOKENS, STORAGE_CONTADOR, STORAGE_RESUMEN].includes(key)) keysToRemove.push(key);
@@ -508,7 +521,7 @@ function mostrarMenu() {
     document.getElementById('nomi-menu-cerrar-sesion').onclick = () => {
         if (confirm('¿Cerrar sesión? Se borrarán los datos de validación y credenciales.')) {
             setValidado(false);
-            ['STORAGE_API_KEY','STORAGE_TAVILY_KEY','STORAGE_MODELO','STORAGE_URL','STORAGE_POSICION','STORAGE_POSICION_VENTANA','STORAGE_RESUMEN','STORAGE_TOKENS','STORAGE_CONTADOR','STORAGE_CONTEXTO','STORAGE_MODO_LIGERO','STORAGE_MODO_RESUMEN','STORAGE_BUSQUEDA_WEB','STORAGE_TAMANO_VENTANA','STORAGE_UBICACION','STORAGE_UBICACION_ACTIVADA','STORAGE_ERROR_LOGS','STORAGE_CREDENCIALES_CARGADAS','STORAGE_CONFIG_INICIAL','STORAGE_MOTOR_BUSQUEDA'].forEach(k => eliminarValor(eval(k)));
+            ['STORAGE_API_KEY','STORAGE_TAVILY_KEY','STORAGE_MODELO','STORAGE_URL','STORAGE_POSICION','STORAGE_POSICION_VENTANA','STORAGE_RESUMEN','STORAGE_TOKENS','STORAGE_CONTADOR','STORAGE_CONTEXTO','STORAGE_MODO_LIGERO','STORAGE_MODO_RESUMEN','STORAGE_BUSQUEDA_WEB','STORAGE_TAMANO_VENTANA','STORAGE_UBICACION','STORAGE_UBICACION_ACTIVADA','STORAGE_UBICACION_HABITUAL','STORAGE_ERROR_LOGS','STORAGE_CREDENCIALES_CARGADAS','STORAGE_CONFIG_INICIAL','STORAGE_MOTOR_BUSQUEDA'].forEach(k => eliminarValor(eval(k)));
             Object.keys(localStorage).filter(k => k.startsWith('nomi_historial_')).forEach(k => localStorage.removeItem(k));
             location.reload();
         }

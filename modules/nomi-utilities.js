@@ -35,14 +35,22 @@ function obtenerTamanoReal() {
     return { w, h };
 }
 
-function obtenerContextoTiempo() {
+function obtenerAnclajeTemporal() {
     const ahora = new Date();
-    const fecha = ahora.toISOString().slice(0, 10);
-    const hora = ahora.toTimeString().slice(0, 5);
-    const zona = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const utcOffset = -ahora.getTimezoneOffset() / 60;
-    const offsetStr = utcOffset >= 0 ? `+${utcOffset}` : `${utcOffset}`;
-    return `📅 ${fecha} ${hora} (UTC${offsetStr})`;
+    const dos = (n) => String(n).padStart(2, '0');
+    const fecha = `${ahora.getFullYear()}-${dos(ahora.getMonth() + 1)}-${dos(ahora.getDate())}`;
+    const hora = `${dos(ahora.getHours())}:${dos(ahora.getMinutes())}`;
+    let zona = 'UTC';
+    try { zona = Intl.DateTimeFormat().resolvedOptions().timeZone || zona; } catch (e) { /* fallback UTC */ }
+    const minutos = -ahora.getTimezoneOffset();
+    const signo = minutos >= 0 ? '+' : '-';
+    const offset = `${signo}${dos(Math.floor(Math.abs(minutos) / 60))}:${dos(Math.abs(minutos) % 60)}`;
+    return { fecha, hora, zona, offset: `UTC${offset}` };
+}
+
+function obtenerContextoTiempo() {
+    const anclaje = obtenerAnclajeTemporal();
+    return `📅 ${anclaje.fecha} ${anclaje.hora} (${anclaje.zona}, ${anclaje.offset})`;
 }
 
 function extraerInformacionPagina(limite) {
@@ -76,4 +84,3 @@ function configurarTeclado() {
         }
     });
 }
-

@@ -272,9 +272,9 @@ function esError401NoMi(err) {
         || !!(err && err.message && /401/.test(err.message));
 }
 
-// Petición común al chat del Worker. `permitirBusqueda` solo habilita que Groq
-// decida semánticamente si necesita la herramienta del servidor; no envía claves
-// ni activa ningún flujo de API Personal.
+// Petición común al chat del Worker. Las preferencias solo habilitan que Groq
+// decida semánticamente si necesita una herramienta del servidor; no envían
+// claves ni activan ningún flujo de API Personal.
 async function solicitarChatNoMi(mensaje, opciones) {
     if (!NoMiState.nomiToken) {
         throw new NoMiTokenInvalidoError('No hay token de acceso NoMi. Actívalo con un código de invitación en ⚙️ Configuración.');
@@ -287,7 +287,11 @@ async function solicitarChatNoMi(mensaje, opciones) {
     };
     if (opts.herramienta && typeof opts.herramienta === 'object') cuerpo.herramienta = opts.herramienta;
     if (typeof opts.permitirBusqueda === 'boolean') cuerpo.permitirBusqueda = opts.permitirBusqueda;
+    if (typeof opts.permitirClima === 'boolean') cuerpo.permitirClima = opts.permitirClima;
     if (opts.forzarBusqueda === true) cuerpo.forzarBusqueda = true;
+    if (opts.contextoTemporal && typeof opts.contextoTemporal === 'object') cuerpo.contextoTemporal = opts.contextoTemporal;
+    if (typeof opts.ubicacionHabitual === 'string' && opts.ubicacionHabitual) cuerpo.ubicacionHabitual = opts.ubicacionHabitual;
+    if (typeof opts.ubicacionDispositivo === 'string' && opts.ubicacionDispositivo) cuerpo.ubicacionDispositivo = opts.ubicacionDispositivo;
     try {
         const datos = await hacerPeticion(base + '/v1/chat', {
             method: 'POST',
@@ -317,16 +321,23 @@ async function llamarIANoMi(mensaje, maxTokens, herramienta) {
 // Chat NoMi nuevo: devuelve la respuesta junto con la señal estable de búsqueda
 // y fuentes compactas. Si se pidió navegación y falta la señal del protocolo,
 // no se muestra como actual una respuesta de un Worker antiguo.
-async function llamarIANoMiSemantico(mensaje, permitirBusqueda, forzarBusqueda) {
+async function llamarIANoMiSemantico(mensaje, permitirBusqueda, forzarBusqueda, permitirClima, contexto) {
     const busquedaPermitida = permitirBusqueda === true || forzarBusqueda === true;
+    const climaPermitido = permitirClima === true && forzarBusqueda !== true;
+    const ctx = contexto && typeof contexto === 'object' ? contexto : {};
     const datos = await solicitarChatNoMi(mensaje, {
         permitirBusqueda: busquedaPermitida,
+        permitirClima: climaPermitido,
         forzarBusqueda: forzarBusqueda === true,
+        contextoTemporal: ctx.temporal,
+        ubicacionHabitual: ctx.ubicacionHabitual,
+        ubicacionDispositivo: ctx.ubicacionDispositivo,
     });
-    if (busquedaPermitida && datos.busquedaProtocolo !== 1) {
+    if ((busquedaPermitida || climaPermitido) && datos.herramientasProtocolo !== 1) {
         return {
-            texto: 'La búsqueda web NoMi necesita actualizar el servidor antes de responder con información actual.',
+            texto: 'Las herramientas de NoMi necesitan actualizar el servidor antes de responder con información actual.',
             estadoBusqueda: 'actualizacion_requerida',
+            estadoClima: 'actualizacion_requerida',
             fuentes: [],
         };
     }
@@ -339,7 +350,9 @@ async function llamarIANoMiSemantico(mensaje, permitirBusqueda, forzarBusqueda) 
             fecha: typeof f.fecha === 'string' ? f.fecha : '',
         }))
         : [];
-    return { texto: datos.respuesta, estadoBusqueda, fuentes };
+    const estadosClima = ['ok', 'falta_ubicacion', 'ciudad_no_encontrada', 'limite_diario', 'fallo_proveedor', 'consulta_invalida'];
+    const estadoClima = estadosClima.indexOf(datos.climaEstado) >= 0 ? datos.climaEstado : null;
+    return { texto: datos.respuesta, estadoBusqueda, estadoClima, fuentes };
 }
 
 // Estados explícitos que la ruta de clima del Worker reporta en `climaEstado`.
