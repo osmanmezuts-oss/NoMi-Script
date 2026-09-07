@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NoMi Asistente V5.8
 // @namespace    http://tampermonkey.net/
-// @version      5.20
+// @version      5.21
 // @description  Asistente IA con importación de credenciales, actualización automática y mejoras multiplataforma
 // @match        https://*/*
 // @grant        GM_xmlhttpRequest
@@ -61,7 +61,7 @@ const ALTO_POR_DEFECTO = 400;
 const UBICACION_EXPIRACION = 3 * 60 * 60 * 1000;
 const CONTEXTO_RECIENTE = 10;
 const DIAS_LIMITE_HISTORIAL = 7;
-const VERSION_SCRIPT = '5.20';
+const VERSION_SCRIPT = '5.21';
 const FECHA_LANZAMIENTO = '19/08/2026';
 
 const STORAGE_VALIDADO = 'nomi_validado';
@@ -1193,6 +1193,17 @@ function mostrarNotificacionTemporal(msg) {
 // ======== MÓDULO: Red y Servicios Externos ========
 // NoMi Assistant – Funciones de peticiones HTTP, búsqueda web y llamadas a IA
 
+// Extrae el código de error estable de un cuerpo JSON de respuesta
+// ({ error: 'codigo' }). Devuelve '' si no hay JSON o no hay campo error.
+function extraerCodigoError(texto) {
+    if (typeof texto !== 'string' || !texto) return '';
+    try {
+        const obj = JSON.parse(texto);
+        if (obj && typeof obj.error === 'string') return obj.error;
+    } catch (e) { /* no es JSON: no hay código */ }
+    return '';
+}
+
 function hacerPeticion(url, opciones) {
     return new Promise((resolve, reject) => {
         if (typeof GM_xmlhttpRequest !== 'undefined') {
@@ -1208,13 +1219,22 @@ function hacerPeticion(url, opciones) {
                     } else {
                         const e = new Error(`Error ${resp.status}: ${resp.responseText}`);
                         e.status = resp.status;
+                        const codigo = extraerCodigoError(resp.responseText);
+                        if (codigo) e.codigo = codigo;
                         reject(e);
                     }
                 },
                 onerror: (err) => {
                     fetch(url, opciones)
                         .then(async (r) => {
-                            if (!r.ok) throw new Error(`Error ${r.status}: ${await r.text()}`);
+                            if (!r.ok) {
+                                const texto = await r.text();
+                                const e = new Error(`Error ${r.status}: ${texto}`);
+                                e.status = r.status;
+                                const codigo = extraerCodigoError(texto);
+                                if (codigo) e.codigo = codigo;
+                                throw e;
+                            }
                             return r.json();
                         })
                         .then(resolve)
@@ -1225,8 +1245,11 @@ function hacerPeticion(url, opciones) {
             fetch(url, opciones)
                 .then(async (r) => {
                     if (!r.ok) {
-                        const e = new Error(`Error ${r.status}: ${await r.text()}`);
+                        const texto = await r.text();
+                        const e = new Error(`Error ${r.status}: ${texto}`);
                         e.status = r.status;
+                        const codigo = extraerCodigoError(texto);
+                        if (codigo) e.codigo = codigo;
                         throw e;
                     }
                     return r.json();
@@ -1836,14 +1859,61 @@ function mostrarAvisoVerificacion(tipo) {
         : 'No se pudo verificar disponibilidad del modelo.';
 }
 
-// Verificación de disponibilidad al abrir NoMi. Se ejecuta en segundo plano (no bloquea)
-// y se consulta una sola vez por pestaña/sesión (sessionStorage).
+// Indica si el modo activo es el acceso compartido NoMi (Worker). En ese modo los
+// modelos los decide el catálogo REAL del Worker y NO el catálogo gratuito de OpenRouter.
+function esModoNoMiActivo() {
+    return !!(typeof NoMiState !== 'undefined' && NoMiState && NoMiState.modoAcceso === MODO_ACCESO_NOMI);
+}
+
+// Aviso NoMi propio: el modelo no figura activo en el catálogo real del Worker.
+// Reutiliza el mismo <span> que los avisos de OpenRouter pero con texto NoMi y
+// jamás presenta el mensaje "retirado gratis" que solo aplica al modo Personal.
+function mostrarAvisoModeloNoDisponibleNoMi() {
+    const aviso = _crearAvisoModelo();
+    aviso.style.color = '#f5a623';
+    aviso.textContent = '⚠️ Este modelo no está disponible en el catálogo NoMi. Elige otro en Configuración.';
+}
+
+// Indica si `id` figura ACTIVO en el catálogo público del Worker (proveedor groq).
+function modeloActivoEnCatalogoNoMi(id, catalogo) {
+    return Array.isArray(catalogo && catalogo.modelos)
+        && catalogo.modelos.some(m => m && m.proveedor === 'groq' && m.estado === 'activo' && m.id === id);
+}
+
+// Verificación de disponibilidad al abrir NoMi. Se ejecuta en segundo plano (no
+// bloquea) y se consulta una sola vez por pestaña/sesión (sessionStorage).
+//
+// En modo NoMi valida NoMiState.nomiModelo contra el catálogo real del Worker
+// (GET /v1/catalog) reutilizando la misma ruta que el menú; JAMÁS consulta OpenRouter.
+// En modo Personal conserva la comprobación del catálogo gratuito de OpenRouter y
+// el aviso de modelo retirado.
 async function verificarModeloAlIniciar() {
     if (typeof sessionStorage === 'undefined' || sessionStorage.getItem('nomi_modelo_verificado') === 'true') return;
-    const modelo = (typeof getModelo === 'function' ? getModelo() : '') || (NoMiState && NoMiState.modeloActual);
+    const modoNoMi = esModoNoMiActivo();
+    const modelo = modoNoMi
+        ? ((NoMiState && NoMiState.nomiModelo) || NOMI_MODELO_POR_DEFECTO)
+        : ((typeof getModelo === 'function' ? getModelo() : '') || (NoMiState && NoMiState.modeloActual));
     if (!modelo) return;
     // Marcamos la sesión como verificada ANTES: no se reintenta en la misma pestaña aunque falle.
     sessionStorage.setItem('nomi_modelo_verificado', 'true');
+
+    if (modoNoMi) {
+        // ---- Ruta NoMi: catálogo real del Worker, sin OpenRouter ----
+        try {
+            const catalogo = await obtenerCatalogoNoMi();
+            if (modeloActivoEnCatalogoNoMi(modelo, catalogo)) {
+                // Activo en el Worker → sin aviso; se retira cualquier aviso previo de la sesión.
+                limpiarAvisoModelo();
+            } else {
+                mostrarAvisoModeloNoDisponibleNoMi();
+            }
+        } catch (e) {
+            mostrarAvisoVerificacion('fail');
+        }
+        return;
+    }
+
+    // ---- Ruta Personal: comprobación OpenRouter existente ----
     try {
         const lista = await fetchFreeModelos();
         if (!modeloDisponible(modelo, lista)) {
@@ -2626,29 +2696,36 @@ async function consultarUsoNoMi() {
     }
 }
 
-// Mensaje humano único para errores NoMi (401/429/503/red). El detalle
-// técnico se conserva solo en registrarError().
 function mensajeHumanoErrorNoMi(err) {
     const status = err && typeof err.status === 'number' ? err.status : null;
+    const codigo = err && typeof err.codigo === 'string' ? err.codigo : '';
     if (status === 401 || err instanceof NoMiTokenInvalidoError) {
         return '🔑 Tu acceso NoMi es inválido o fue revocado. Ábrelo en ⚙️ Configuración > Acceso compartido NoMi para reactivarlo.';
     }
-    if (status === 429) return '⏳ Alcanzaste el límite de uso de NoMi. Intenta de nuevo más tarde.';
+    if (codigo === 'limite-por-minuto') return '⏳ NoMi alcanzó el límite de tokens por minuto. Espera un minuto y reintenta.';
+    if (codigo === 'limite-proveedor') return '⏳ NoMi alcanzó temporalmente un límite del proveedor. Espera y reintenta.';
+    if (codigo === 'capacidad-diaria') return '🌙 La capacidad diaria de NoMi está agotada por hoy. Reintenta mañana.';
+    if (codigo === 'bolsa-agotada') return '🛢️ La bolsa compartida de NoMi está agotada por ahora. Reintenta más tarde.';
+    if (status === 429 || codigo === 'cuota-mensual-agotada') return '⏳ Alcanzaste el límite de uso de NoMi. Intenta de nuevo más tarde.';
     if (status === 503) return '🚧 NoMi tiene capacidad limitada ahora mismo. Intenta de nuevo más tarde.';
-    return '📡 No se pudo conectar con NoMi. Pulsa “Reintentar” en el indicador para volver a intentarlo.';
+    return '📡 No se pudo conectar con NoMi. Pulsa \u201cReintentar\u201d en el indicador para volver a intentarlo.';
 }
 
-// Mapea un error de red/Worker NoMi a un estado de HUD (401/429/503/red).
+// Mapea un error de red/Worker NoMi a un estado de HUD. Usa el código estable
+// si está disponible y el estado HTTP como respaldo (Worker antiguo).
 // 401 conserva el token pero marca el acceso inactivo. No agrega mensajes de
 // chat (eso lo hace preguntar() con mensajeHumanoErrorNoMi).
 function mapearErrorHudNoMi(err) {
     const status = err && typeof err.status === 'number' ? err.status : null;
+    const codigo = err && typeof err.codigo === 'string' ? err.codigo : '';
     if (status === 401 || err instanceof NoMiTokenInvalidoError) {
         setNomiAccesoActivo(false);
         NoMiState.reintentarPregunta = '';
         NoMiState.reintentarBusquedaForzada = false;
         establecerEstadoHud('acceso_invalido');
-    } else if (status === 429) {
+    } else if (codigo === 'limite-por-minuto' || codigo === 'limite-proveedor' || codigo === 'capacidad-diaria' || codigo === 'bolsa-agotada') {
+        establecerEstadoHud('capacidad');
+    } else if (status === 429 || codigo === 'cuota-mensual-agotada') {
         establecerEstadoHud('limite');
     } else if (status === 503) {
         establecerEstadoHud('capacidad');

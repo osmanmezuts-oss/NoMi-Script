@@ -144,14 +144,61 @@ function mostrarAvisoVerificacion(tipo) {
         : 'No se pudo verificar disponibilidad del modelo.';
 }
 
-// Verificación de disponibilidad al abrir NoMi. Se ejecuta en segundo plano (no bloquea)
-// y se consulta una sola vez por pestaña/sesión (sessionStorage).
+// Indica si el modo activo es el acceso compartido NoMi (Worker). En ese modo los
+// modelos los decide el catálogo REAL del Worker y NO el catálogo gratuito de OpenRouter.
+function esModoNoMiActivo() {
+    return !!(typeof NoMiState !== 'undefined' && NoMiState && NoMiState.modoAcceso === MODO_ACCESO_NOMI);
+}
+
+// Aviso NoMi propio: el modelo no figura activo en el catálogo real del Worker.
+// Reutiliza el mismo <span> que los avisos de OpenRouter pero con texto NoMi y
+// jamás presenta el mensaje "retirado gratis" que solo aplica al modo Personal.
+function mostrarAvisoModeloNoDisponibleNoMi() {
+    const aviso = _crearAvisoModelo();
+    aviso.style.color = '#f5a623';
+    aviso.textContent = '⚠️ Este modelo no está disponible en el catálogo NoMi. Elige otro en Configuración.';
+}
+
+// Indica si `id` figura ACTIVO en el catálogo público del Worker (proveedor groq).
+function modeloActivoEnCatalogoNoMi(id, catalogo) {
+    return Array.isArray(catalogo && catalogo.modelos)
+        && catalogo.modelos.some(m => m && m.proveedor === 'groq' && m.estado === 'activo' && m.id === id);
+}
+
+// Verificación de disponibilidad al abrir NoMi. Se ejecuta en segundo plano (no
+// bloquea) y se consulta una sola vez por pestaña/sesión (sessionStorage).
+//
+// En modo NoMi valida NoMiState.nomiModelo contra el catálogo real del Worker
+// (GET /v1/catalog) reutilizando la misma ruta que el menú; JAMÁS consulta OpenRouter.
+// En modo Personal conserva la comprobación del catálogo gratuito de OpenRouter y
+// el aviso de modelo retirado.
 async function verificarModeloAlIniciar() {
     if (typeof sessionStorage === 'undefined' || sessionStorage.getItem('nomi_modelo_verificado') === 'true') return;
-    const modelo = (typeof getModelo === 'function' ? getModelo() : '') || (NoMiState && NoMiState.modeloActual);
+    const modoNoMi = esModoNoMiActivo();
+    const modelo = modoNoMi
+        ? ((NoMiState && NoMiState.nomiModelo) || NOMI_MODELO_POR_DEFECTO)
+        : ((typeof getModelo === 'function' ? getModelo() : '') || (NoMiState && NoMiState.modeloActual));
     if (!modelo) return;
     // Marcamos la sesión como verificada ANTES: no se reintenta en la misma pestaña aunque falle.
     sessionStorage.setItem('nomi_modelo_verificado', 'true');
+
+    if (modoNoMi) {
+        // ---- Ruta NoMi: catálogo real del Worker, sin OpenRouter ----
+        try {
+            const catalogo = await obtenerCatalogoNoMi();
+            if (modeloActivoEnCatalogoNoMi(modelo, catalogo)) {
+                // Activo en el Worker → sin aviso; se retira cualquier aviso previo de la sesión.
+                limpiarAvisoModelo();
+            } else {
+                mostrarAvisoModeloNoDisponibleNoMi();
+            }
+        } catch (e) {
+            mostrarAvisoVerificacion('fail');
+        }
+        return;
+    }
+
+    // ---- Ruta Personal: comprobación OpenRouter existente ----
     try {
         const lista = await fetchFreeModelos();
         if (!modeloDisponible(modelo, lista)) {

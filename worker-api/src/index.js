@@ -179,14 +179,14 @@ async function ejecutarGroqContabilizado(env, db, usuario, { modelo, mensajes, m
     const hoy = diaActual();
     const primerUsoCandidato = !usuario.primer_uso_dia || usuario.primer_uso_dia !== hoy;
     const cap = decidirModo({ primerUsoCandidato, compartidaUsada: snap.compartida_usada });
-    if (cap.modo === CAPACIDAD.RESERVA_PROTEGIDA && !primerUsoCandidato) throw E.capacidadTemporal();
+    if (cap.modo === CAPACIDAD.RESERVA_PROTEGIDA && !primerUsoCandidato) throw E.capacidadDiaria();
 
     const maxSalida = Math.min(
         Number(maxTokens) > 0 ? Number(maxTokens) : RESERVA.MAX_SALIDA_TOKENS,
         cap.max_tokens,
         RESERVA.MAX_SALIDA_TOKENS,
     );
-    if (maxSalida <= 0) throw E.capacidadTemporal();
+    if (maxSalida <= 0) throw E.capacidadDiaria();
 
     const herramientasTokens = Array.isArray(herramientas) && herramientas.length
         ? bytesTexto(JSON.stringify(herramientas)) * RESERVA.TOKENS_POR_BYTE_ENTRADA
@@ -205,7 +205,16 @@ async function ejecutarGroqContabilizado(env, db, usuario, { modelo, mensajes, m
         body: JSON.stringify({ usuarioId: usuario.id, tokens: tokensReservados, solicitudes: 1, primerUso: primerUsoCandidato }),
     });
     const reserva = await reservaResp.json();
-    if (!reserva.permitido) throw E.capacidadTemporal();
+    if (!reserva.permitido) {
+        // Causa concreta con código estable (nunca un 503 ambiguo para todas):
+        // - 'minuto'               -> límite de tokens por minuto (TPM).
+        // - 'dia'/'solicitudes'/'capacidad' -> capacidad diaria real o bolsa diaria.
+        // Cualquier otro motivo (p. ej. 'sin-usuario' = bug interno) cae en 500
+        // seguro 'interno' y no expone estadísticas de otros usuarios.
+        if (reserva.motivo === 'minuto') throw E.limitePorMinuto();
+        if (reserva.motivo === 'dia' || reserva.motivo === 'solicitudes' || reserva.motivo === 'capacidad') throw E.capacidadDiaria();
+        throw new Error('reserva rechazada sin motivo reconocido');
+    }
 
     const reservaUsuario = await db.reservarUso(usuario.id, tokensReservados);
     if (!reservaUsuario) {
@@ -216,7 +225,7 @@ async function ejecutarGroqContabilizado(env, db, usuario, { modelo, mensajes, m
     if (!reservaBolsa) {
         await db.reconciliarUso(usuario.id, tokensReservados);
         await doObj.fetch('https://internal/liberar', { method: 'POST', body: JSON.stringify({ reservaId: reserva.reservaId }) });
-        throw E.capacidadTemporal();
+        throw E.bolsaAgotada();
     }
 
     let resultado;

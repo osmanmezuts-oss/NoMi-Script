@@ -94,7 +94,8 @@ function sistemaParaModo(modo) {
 }
 
 // Llama a Groq. Devuelve { texto, usage } con usage del proveedor.
-// Lanza E.proveedorNoDisponible en fallo de red o 5xx; E.parametrosInvalidos en 4xx.
+// Lanza E.limiteProveedor() en HTTP 429 real del proveedor (TPM/RPM/TPD/RPD);
+// E.proveedorNoDisponible() en fallo de red o 5xx; E.parametrosInvalidos en 4xx.
 export async function llamarGroq(env, { modelo, mensajes, max_tokens, modo = MODO_GROQ.NORMAL, herramientas = [] }) {
     // Mensajes completos con la instrucción de sistema al inicio (sin duplicar si
     // ya viniera una; el handler solo envía un mensaje de usuario).
@@ -133,8 +134,12 @@ export async function llamarGroq(env, { modelo, mensajes, max_tokens, modo = MOD
     }
 
     if (!resp.ok) {
-        // 429 = límite del proveedor (capacidad temporal). 5xx = proveedor no disponible.
-        if (resp.status === 429 || resp.status >= 500) {
+        // 429 del proveedor = límite real (TPM/RPM/TPD/RPD): límite-proveedor.
+        // 5xx = proveedor no disponible (502).
+        if (resp.status === 429) {
+            throw E.limiteProveedor();
+        }
+        if (resp.status >= 500) {
             throw E.proveedorNoDisponible();
         }
         throw E.parametrosInvalidos('El proveedor rechazó la solicitud.');

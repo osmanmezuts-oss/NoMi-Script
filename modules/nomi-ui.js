@@ -452,29 +452,36 @@ async function consultarUsoNoMi() {
     }
 }
 
-// Mensaje humano único para errores NoMi (401/429/503/red). El detalle
-// técnico se conserva solo en registrarError().
 function mensajeHumanoErrorNoMi(err) {
     const status = err && typeof err.status === 'number' ? err.status : null;
+    const codigo = err && typeof err.codigo === 'string' ? err.codigo : '';
     if (status === 401 || err instanceof NoMiTokenInvalidoError) {
         return '🔑 Tu acceso NoMi es inválido o fue revocado. Ábrelo en ⚙️ Configuración > Acceso compartido NoMi para reactivarlo.';
     }
-    if (status === 429) return '⏳ Alcanzaste el límite de uso de NoMi. Intenta de nuevo más tarde.';
+    if (codigo === 'limite-por-minuto') return '⏳ NoMi alcanzó el límite de tokens por minuto. Espera un minuto y reintenta.';
+    if (codigo === 'limite-proveedor') return '⏳ NoMi alcanzó temporalmente un límite del proveedor. Espera y reintenta.';
+    if (codigo === 'capacidad-diaria') return '🌙 La capacidad diaria de NoMi está agotada por hoy. Reintenta mañana.';
+    if (codigo === 'bolsa-agotada') return '🛢️ La bolsa compartida de NoMi está agotada por ahora. Reintenta más tarde.';
+    if (status === 429 || codigo === 'cuota-mensual-agotada') return '⏳ Alcanzaste el límite de uso de NoMi. Intenta de nuevo más tarde.';
     if (status === 503) return '🚧 NoMi tiene capacidad limitada ahora mismo. Intenta de nuevo más tarde.';
-    return '📡 No se pudo conectar con NoMi. Pulsa “Reintentar” en el indicador para volver a intentarlo.';
+    return '📡 No se pudo conectar con NoMi. Pulsa \u201cReintentar\u201d en el indicador para volver a intentarlo.';
 }
 
-// Mapea un error de red/Worker NoMi a un estado de HUD (401/429/503/red).
+// Mapea un error de red/Worker NoMi a un estado de HUD. Usa el código estable
+// si está disponible y el estado HTTP como respaldo (Worker antiguo).
 // 401 conserva el token pero marca el acceso inactivo. No agrega mensajes de
 // chat (eso lo hace preguntar() con mensajeHumanoErrorNoMi).
 function mapearErrorHudNoMi(err) {
     const status = err && typeof err.status === 'number' ? err.status : null;
+    const codigo = err && typeof err.codigo === 'string' ? err.codigo : '';
     if (status === 401 || err instanceof NoMiTokenInvalidoError) {
         setNomiAccesoActivo(false);
         NoMiState.reintentarPregunta = '';
         NoMiState.reintentarBusquedaForzada = false;
         establecerEstadoHud('acceso_invalido');
-    } else if (status === 429) {
+    } else if (codigo === 'limite-por-minuto' || codigo === 'limite-proveedor' || codigo === 'capacidad-diaria' || codigo === 'bolsa-agotada') {
+        establecerEstadoHud('capacidad');
+    } else if (status === 429 || codigo === 'cuota-mensual-agotada') {
         establecerEstadoHud('limite');
     } else if (status === 503) {
         establecerEstadoHud('capacidad');

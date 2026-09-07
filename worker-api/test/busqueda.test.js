@@ -304,10 +304,11 @@ test('sin token -> 401; herramienta inválida -> 400; chat normal sigue vía Gro
 // Stub secuencial del flujo nuevo: Groq decide -> Tavily -> Groq sintetiza.
 // Registra cuerpos para comprobar contrato, límites y ausencia de fugas.
 function instalarFetchSemantico(config = {}) {
-    const estado = { groq: [], tavily: [] };
+    const estado = { groq: [], tavily: [], urls: [] };
     let indiceGroq = 0;
     globalThis.fetch = async (url, opts = {}) => {
         const u = String(url);
+        estado.urls.push(u);
         if (u.includes('groq.com')) {
             const cuerpo = JSON.parse(opts.body || '{}');
             estado.groq.push(cuerpo);
@@ -584,4 +585,47 @@ test('síntesis truncada o fragmentaria no muestra enlaces sin respuesta y permi
         assert.equal(data.fuentes, undefined, 'un fragmento no se acompaña de enlaces como si fuera respuesta');
         assert.equal(estado.groq.length, 2);
     }
+});
+test('búsqueda exitosa: exactamente 1 Tavily + 2 Groq, sin groq/compound ni búsqueda nativa', async () => {
+    const env = envNuevo();
+    const { token, db } = await crearInvitado(env);
+    const estado = instalarFetchSemantico({
+        groq: [
+            { toolCalls: toolBusqueda({ consulta: 'novedades de inteligencia artificial hoy', tema: 'news', recencia: 'day' }), total: 20 },
+            { texto: 'Resumen con evidencia [1] [2].', total: 25 },
+        ],
+    });
+    const r = await llamar(env, '/v1/chat', {
+        metodo: 'POST', token,
+        body: { modelo: 'openai/gpt-oss-120b', mensaje: 'Cuéntame las novedades de IA hoy', permitirBusqueda: true },
+    });
+    assert.equal(r.status, 200);
+    const data = await r.json();
+    assert.equal(data.busquedaEstado, 'ok');
+    assert.equal(data.busquedaProtocolo, 1);
+
+    // Flujo exacto: Groq decisión -> Tavily -> Groq síntesis.
+    assert.equal(estado.groq.length, 2, 'exactamente dos llamadas Groq');
+    assert.equal(estado.tavily.length, 1, 'exactamente una llamada Tavily');
+    assert.ok(estado.urls[0].includes('groq.com'), '1ª llamada: Groq (decisión semántica)');
+    assert.ok(estado.urls[1].includes('api.tavily.com'), '2ª llamada: Tavily');
+    assert.ok(estado.urls[2].includes('groq.com'), '3ª llamada: Groq (síntesis)');
+    assert.equal(estado.urls.length, 3, 'ninguna llamada extra (sin buscador nativo ni duplicados)');
+
+    // Modelos permitidos: nunca groq/compound ni búsqueda web nativa.
+
+    for (const cuerpo of estado.groq) {
+        assert.notEqual(cuerpo.model, 'groq/compound', 'no usa groq/compound');
+        assert.match(cuerpo.model, /^openai\/gpt-oss-(20b|120b)$/, 'solo modelos de la allowlist Groq');
+    }
+    // El stub lanza para cualquier URL distinta a Groq chat completions o Tavily,
+    // de modo que esta aserción adicional confirma que no hubo búsqueda nativa.
+
+    assert.ok(estado.urls.every(u => u.includes('groq.com') || u.includes('api.tavily.com')), 'solo chat completions de Groq y Tavily: cero búsqueda web nativa de Groq');
+
+    const usuario = await db.buscarPorToken(token);
+    const uso = await db.obtenerUso(usuario.id);
+    assert.equal(uso.tokens, 45, 'suma el usage real de ambas llamadas Groq');
+    assert.equal(uso.solicitudes, 2);
+    assert.equal(await db.contarConsultasBusqueda(usuario.id, diaActual()),  1, 'una búsqueda diaria contabilizada');
 });
