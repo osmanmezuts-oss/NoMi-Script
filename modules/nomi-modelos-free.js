@@ -179,20 +179,23 @@ async function verificarModeloAlIniciar() {
         ? ((NoMiState && NoMiState.nomiModelo) || NOMI_MODELO_POR_DEFECTO)
         : ((typeof getModelo === 'function' ? getModelo() : '') || (NoMiState && NoMiState.modeloActual));
     if (!modelo) return;
-    // Marcamos la sesión como verificada ANTES: no se reintenta en la misma pestaña aunque falle.
-    sessionStorage.setItem('nomi_modelo_verificado', 'true');
 
     if (modoNoMi) {
         // ---- Ruta NoMi: catálogo real del Worker, sin OpenRouter ----
         try {
             const catalogo = await obtenerCatalogoNoMi();
+            // Limpia cualquier aviso previo ANTES de revalidar.
+            limpiarAvisoModelo();
             if (modeloActivoEnCatalogoNoMi(modelo, catalogo)) {
-                // Activo en el Worker → sin aviso; se retira cualquier aviso previo de la sesión.
-                limpiarAvisoModelo();
+                // Activo en el Worker → sin aviso.
+                // Marca la sesión como verificada SOLO tras confirmar disponibilidad.
+                sessionStorage.setItem('nomi_modelo_verificado', 'true');
             } else {
                 mostrarAvisoModeloNoDisponibleNoMi();
             }
         } catch (e) {
+            // Catálogo fallido: NO marcar sesión como verificada (permite reintento en otra pestaña).
+            // Muestra aviso de verificación recuperable, no modelo inválido.
             mostrarAvisoVerificacion('fail');
         }
         return;
@@ -201,16 +204,18 @@ async function verificarModeloAlIniciar() {
     // ---- Ruta Personal: comprobación OpenRouter existente ----
     try {
         const lista = await fetchFreeModelos();
+        limpiarAvisoModelo();
         if (!modeloDisponible(modelo, lista)) {
             mostrarAvisoModeloRetirado();
             return;
         }
-        // Disponible → sin aviso; se retira cualquier aviso previo de la sesión.
-        limpiarAvisoModelo();
+        // Disponible → sin aviso; marca sesión verificada.
+        sessionStorage.setItem('nomi_modelo_verificado', 'true');
     } catch (e) {
         if (e instanceof OpenRouterRateLimitError) mostrarAvisoVerificacion('limit');
         else mostrarAvisoVerificacion('fail');
         // No marcamos el modelo como retirado ante 429 ni error de red.
+        // No marcar sesión verificada para permitir reintento.
     }
     // No se envía diagnóstico ni se registra error por retirada normal de un modelo.
 }

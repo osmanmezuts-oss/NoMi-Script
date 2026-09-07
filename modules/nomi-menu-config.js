@@ -391,7 +391,10 @@ function mostrarMenu() {
         activarNoMiBtn.disabled = true;
         activarNoMiBtn.textContent = '⏳ Activando…';
         try {
-            await activarAccesoNoMi(codigo);
+            // activarAccesoNoMi ahora devuelve { token, catalogo } y sincroniza el catálogo
+            // antes de validar/mostrar el modelo. Durante la sincronización mostramos
+            // "Verificando acceso..." y NO mostramos falso modelo no disponible/retirado.
+            const resultado = await activarAccesoNoMi(codigo);
             setModoAcceso(MODO_ACCESO_NOMI);
             const sel = document.getElementById('nomi-select-modo');
             if (sel) sel.value = 'nomi';
@@ -401,7 +404,12 @@ function mostrarMenu() {
             actualizarIndicador();
             const est = document.getElementById('nomi-estado-acceso');
             if (est) est.textContent = '✅ Activo';
-            mostrarNotificacionTemporal('✅ Acceso NoMi activado. Ya puedes chatear.');
+            // Si el catálogo falló temporalmente, mostramos estado recuperable, no error de modelo.
+            if (resultado.catalogo) {
+                mostrarNotificacionTemporal('✅ Acceso NoMi activado. Catálogo sincronizado.');
+            } else {
+                mostrarNotificacionTemporal('✅ Acceso NoMi activado. Verificando catálogo…');
+            }
             cargarModelosNoMiAlMenu();
             establecerEstadoHud(null);
             consultarUsoNoMi();

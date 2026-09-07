@@ -175,8 +175,28 @@ function construirMensajeResumenNoMi(historialCompleto) {
     return prompt;
 }
 
+// Aplica un catálogo recién obtenido tras activar o recuperar NoMi. Centralizarlo
+// evita que el asistente inicial y el menú queden con avisos de otro modo/modelo.
+function sincronizarCatalogoTrasAccesoNoMi(catalogo) {
+    if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem('nomi_modelo_verificado');
+    if (typeof limpiarAvisoModelo === 'function') limpiarAvisoModelo();
+    if (!catalogo) return false;
+
+    const activo = (catalogo.modelos || []).find(x => x && x.proveedor === 'groq' && x.estado === 'activo');
+    if (activo && activo.id) setNomiModelo(activo.id);
+    const modelo = getNomiModelo() || NOMI_MODELO_POR_DEFECTO;
+    const disponible = typeof modeloActivoEnCatalogoNoMi === 'function'
+        && modeloActivoEnCatalogoNoMi(modelo, catalogo);
+    if (disponible) {
+        if (typeof sessionStorage !== 'undefined') sessionStorage.setItem('nomi_modelo_verificado', 'true');
+        return true;
+    }
+    if (typeof mostrarAvisoModeloNoDisponibleNoMi === 'function') mostrarAvisoModeloNoDisponibleNoMi();
+    return false;
+}
+
 // Activa el acceso: canjea el código de invitación y guarda el token opaco.
-// Devuelve el token en éxito; lanza Error descriptivo en fallo (sin guardar token).
+// Devuelve { token, catalogo } en éxito; lanza Error descriptivo en fallo (sin guardar token).
 async function activarAccesoNoMi(codigo) {
     resetearUrlWorkerNoMi();
     const base = nomiWorkerBase();
@@ -197,13 +217,22 @@ async function activarAccesoNoMi(codigo) {
     setNomiWorkerUrl(NOMI_WORKER_URL_POR_DEFECTO);
     setNomiToken(datos.token);
     setNomiAccesoActivo(true);
-    // Intenta obtener el catálogo para fijar un modelo groq activo por defecto.
+    // Sincroniza catálogo real del Worker ANTES de validar/mostrar el modelo.
+    // Devuelve el catálogo (o null si falla temporalmente) para que el llamador
+    // pueda mostrar "Verificando acceso..." y manejar el error de forma recuperable.
+    let catalogo = null;
     try {
-        const cat = await obtenerCatalogoNoMi();
-        const m = (cat && cat.modelos || []).find(x => x && x.proveedor === 'groq' && x.estado === 'activo');
-        if (m && m.id) setNomiModelo(m.id);
-    } catch (_) { /* el catálogo es opcional para la activación */ }
-    return datos.token;
+        catalogo = await obtenerCatalogoNoMi();
+        sincronizarCatalogoTrasAccesoNoMi(catalogo);
+    } catch (_) {
+        // Catálogo opcional para la activación: conservamos token y acceso activo.
+        // El llamador decidirá cómo mostrar el estado transitorio.
+        catalogo = null;
+    }
+    // Aunque el catálogo falle, se elimina cualquier aviso heredado de Personal;
+    // el acceso ya es válido y podrá reintentarse la comprobación después.
+    if (!catalogo) sincronizarCatalogoTrasAccesoNoMi(null);
+    return { token: datos.token, catalogo };
 }
 
 // Convierte errores HTTP de activación en mensajes claros para el usuario.
@@ -239,12 +268,14 @@ async function recuperarAccesoPropietario(clave) {
     setNomiWorkerUrl(NOMI_WORKER_URL_POR_DEFECTO);
     setNomiToken(datos.token);
     setNomiAccesoActivo(true);
+    let catalogo = null;
     try {
-        const cat = await obtenerCatalogoNoMi();
-        const m = (cat && cat.modelos || []).find(x => x && x.proveedor === 'groq' && x.estado === 'activo');
-        if (m && m.id) setNomiModelo(m.id);
-    } catch (_) { /* el catálogo es opcional para la recuperación */ }
-    return datos.token;
+        catalogo = await obtenerCatalogoNoMi();
+        sincronizarCatalogoTrasAccesoNoMi(catalogo);
+    } catch (_) {
+        sincronizarCatalogoTrasAccesoNoMi(null);
+    }
+    return { token: datos.token, catalogo };
 }
 
 // Convierte errores HTTP de recuperación propietaria en mensajes claros.

@@ -92,13 +92,32 @@ function exportarChat(fecha, formato) {
     const data = localStorage.getItem(key);
     if (!data) { alert('No hay historial para esa fecha.'); return; }
     const historialData = JSON.parse(data);
+    // Privacidad: excluir mensajes de sistema (role: "system"), coordenadas GPS,
+    // prompts internos, instrucciones técnicas y contexto de ubicación.
+    // Solo exportar mensajes user/assistant y fuentes.
+    const filtrado = historialData
+        .filter(m => m && (m.role === 'user' || m.role === 'assistant'))
+        .map(m => ({
+            role: m.role,
+            content: m.content,
+            // Fuentes solo si existen (formato compacto)
+            fuentes: Array.isArray(m.fuentes) ? m.fuentes.map(f => ({
+                titulo: f.titulo,
+                url: f.url,
+                fecha: f.fecha
+            })) : undefined
+        }));
     let contenido = '';
     if (formato === 'json') {
-        contenido = JSON.stringify(historialData, null, 2);
+        contenido = JSON.stringify(filtrado, null, 2);
     } else {
-        contenido = historialData.map(m => {
+        contenido = filtrado.map(m => {
             const rol = m.role === 'user' ? '👤 Tú' : `🤖 ${NOMBRE_ASISTENTE}`;
-            return `${rol}: ${m.content}`;
+            let texto = `${rol}: ${m.content}`;
+            if (m.fuentes && m.fuentes.length) {
+                texto += '\n\nFuentes:\n' + m.fuentes.map((f, i) => `[${i+1}] ${f.titulo} — ${f.url}`).join('\n');
+            }
+            return texto;
         }).join('\n\n');
     }
     const blob = new Blob([contenido], {type: formato === 'json' ? 'application/json' : 'text/plain;charset=utf-8'});

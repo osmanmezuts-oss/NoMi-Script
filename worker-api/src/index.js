@@ -385,7 +385,7 @@ function construirPromptSintesis(mensaje, solicitud, resultados) {
         contenido: r.contenido,
         fecha: r.fecha || '',
     }));
-    return 'Redacta la respuesta final a partir de estos datos JSON. Entrega una respuesta completa, no un título ni un fragmento: para noticias con varias fuentes, resume los hechos principales en 2 o 3 viñetas y cita cada una como [1], [2] o [3]. No enumeres enlaces ni menciones que vas a responder; escribe al menos una oración terminada antes de finalizar.\n' + JSON.stringify({
+    return 'Redacta la respuesta final a partir de estos datos JSON. Entrega una respuesta completa, no un título ni un fragmento: abre con la conclusión y resume después solo los hechos útiles; cita afirmaciones como [1], [2] o [3]. No enumeres enlaces ni menciones que vas a responder; escribe al menos una oración terminada antes de finalizar. Descarta cualquier fuente que no sea relevante para el tema de la consulta original. Si la evidencia no basta o es contradictoria, dilo claramente sin inventar ni mezclar datos.\n' + JSON.stringify({
         pregunta: preguntaActualDesdeMensaje(mensaje),
         consulta_resuelta: solicitud.consulta,
         evidencia,

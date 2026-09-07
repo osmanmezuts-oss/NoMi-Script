@@ -1,7 +1,23 @@
 // ======== MÓDULO: Ubicación Geográfica ========
 // NoMi Assistant – Funciones de geolocalización y gestión de ubicación
 
+// Clave para almacenar si ya se denegó el permiso en esta sesión
+const GPS_PERMISO_DENEGADO_SESION = 'nomi_gps_permiso_denegado_sesion';
+
+function esContextoPrincipal() {
+    try {
+        return window.top === window.self;
+    } catch {
+        // Si no se puede acceder a window.top (cross-origin), asumimos que NO es principal
+        return false;
+    }
+}
+
 function obtenerUbicacionPorGPS() {
+    // No pedir GPS desde iframes: salir silenciosamente sin pedir ni notificar
+    if (!esContextoPrincipal()) {
+        return Promise.reject(new Error('GPS no disponible en iframe'));
+    }
     return new Promise((resolve, reject) => {
         if (!navigator.geolocation) {
             reject(new Error('Geolocalización no soportada por este navegador.'));
@@ -32,9 +48,21 @@ function obtenerUbicacionPorGPS() {
                     }));
             },
             (error) => {
-                if (error.code === 1) reject(new Error('Permiso denegado. Activa la ubicación en los ajustes del navegador.'));
-                else if (error.code === 3) reject(new Error('Timeout. Reintentando...'));
-                else reject(new Error('Error al obtener ubicación: ' + error.message));
+                if (error.code === 1) {
+                    // Permiso denegado: registrar una vez por sesión, NO volver a notificar ni loguear
+                    const yaDenegado = sessionStorage.getItem(GPS_PERMISO_DENEGADO_SESION);
+                    if (!yaDenegado) {
+                        sessionStorage.setItem(GPS_PERMISO_DENEGADO_SESION, '1');
+                        reject(new Error('Permiso denegado. Activa la ubicación en los ajustes del navegador.'));
+                    } else {
+                        // Denegación repetida: rechazar silenciosamente sin notificar ni loguear
+                        reject(new Error('GPS: permiso denegado (ya informado)'));
+                    }
+                } else if (error.code === 3) {
+                    reject(new Error('Timeout. Reintentando...'));
+                } else {
+                    reject(new Error('Error al obtener ubicación: ' + error.message));
+                }
             },
             { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
         );
@@ -58,6 +86,14 @@ async function actualizarUbicacion(silencioso = false, intento = 1) {
         inyectarContextoUbicacion(ubicacion);
         return ubicacion;
     } catch (error) {
+        // Denegación repetida de permiso: no loguear ni notificar
+        if (error.message === 'GPS: permiso denegado (ya informado)') {
+            return null;
+        }
+        // GPS no disponible en iframe: salir silenciosamente
+        if (error.message === 'GPS no disponible en iframe') {
+            return null;
+        }
         if (intento <= 3 && error.message.includes('Timeout')) {
             if (!silencioso) mostrarNotificacionTemporal(`🔄 Reintentando GPS... (intento ${intento}/3)`);
             await new Promise(r => setTimeout(r, 2000));

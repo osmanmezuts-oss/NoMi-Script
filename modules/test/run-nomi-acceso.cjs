@@ -21,22 +21,46 @@ const fuentes = [
     leer('nomi-ui.js'),
     leer('nomi-chat.js'),
     leer('nomi-core.js'),
+    leer('nomi-modelos-free.js'),
 ];
 
 // ---- Entorno simulado del navegador ----
 const store = new Map();
 const memLocal = new Map();
+const memSession = new Map();
+
+// Shared state for avisos (captured by closure in functions below)
+const sharedState = {
+    _avisos: {
+        'nomi-modelo-aviso': null,
+        'nomi-modelo-display': { textContent: '', style: {} },
+        'nomi-proveedor-display': { textContent: '', style: {} },
+        'nomi-hud-status': { textContent: '', style: {} },
+        'nomi-hud-quota': { textContent: '', style: { display: 'none' } },
+        'nomi-loading': { style: { display: 'none' }, dataset: {}, children: [] },
+        'nomi-dots': { textContent: '' },
+        'nomi-input': { style: {}, disabled: false, value: '', focus: () => {} },
+        'nomi-enviar': { style: {}, disabled: false },
+        'nomi-search-btn': { style: {}, disabled: false },
+    },
+};
 
 let responder = null; // (url, opts) => Promise
 
 const ctx = {
     console,
     assert,
+    sharedState,
     location: { href: 'https://example.com', hostname: 'example.com' },
     localStorage: {
         getItem: (k) => (memLocal.has(k) ? memLocal.get(k) : null),
         setItem: (k, v) => memLocal.set(k, String(v)),
         removeItem: (k) => memLocal.delete(k),
+    },
+    sessionStorage: {
+        getItem: (k) => (memSession.has(k) ? memSession.get(k) : null),
+        setItem: (k, v) => memSession.set(k, String(v)),
+        removeItem: (k) => memSession.delete(k),
     },
     GM_getValue: (k, d) => (store.has(k) ? store.get(k) : d),
     GM_setValue: (k, v) => store.set(k, v),
@@ -44,10 +68,10 @@ const ctx = {
     mostrarNotificacionTemporal: () => {},
     registrarError: () => {},
     obtenerInstalacionId: () => 'nmi-test',
-    TextEncoder,
-    TextDecoder,
-    // Stubs mínimos de DOM/UI para ejecutar preguntar() sin navegador real.
-    document: { getElementById: () => null, createElement: () => ({ style: {}, setAttribute() {}, appendChild() {} }), body: { appendChild() {} } },
+    obtenerContextoTiempo: () => 'Fecha: 2026-09-07',
+    obtenerAnclajeTemporal: () => ({ fecha: '2026-09-07', hora: '12:00', zona: 'America/La_Paz', offset: 'UTC-04:00' }),
+    extraerInformacionPagina: () => ({ titulo: 'Ejemplo', url: 'https://example.com', metaDesc: '', encabezados: [], texto: '' }),
+    requiereBusqueda: () => false,
     agregarMensaje: () => {},
     actualizarStats: () => {},
     mostrarCargando: () => {},
@@ -57,11 +81,6 @@ const ctx = {
     toggleVentana: () => {},
     toggleBurbuja: () => {},
     cargarHistorial: () => {},
-    // Auxiliares usados por preguntar() que viven en otros módulos (utilities/chat/etc.).
-    obtenerContextoTiempo: () => 'Fecha: 2026-08-19',
-    obtenerAnclajeTemporal: () => ({ fecha: '2026-08-19', hora: '12:00', zona: 'America/La_Paz', offset: 'UTC-04:00' }),
-    extraerInformacionPagina: () => ({ titulo: 'Ejemplo', url: 'https://example.com', metaDesc: '', encabezados: [], texto: '' }),
-    requiereBusqueda: () => false,
     setContador: () => {},
     setTokens: () => {},
     setResumen: () => {},
@@ -69,6 +88,28 @@ const ctx = {
     mostrarExportacion: () => {},
     mostrarAyuda: () => {},
     guardarHistorial: () => {},
+    TextEncoder,
+    TextDecoder,
+    setTimeout, clearTimeout, setInterval, clearInterval,
+    // Stubs para avisos de modelo (cierran sobre sharedState)
+    limpiarAvisoModelo: () => { sharedState._avisos['nomi-modelo-aviso'] = null; },
+    mostrarAvisoModeloRetirado: () => { sharedState._avisos['nomi-modelo-aviso'] = { textContent: 'retirado', style: {} }; },
+    mostrarAvisoModeloNoDisponibleNoMi: () => { sharedState._avisos['nomi-modelo-aviso'] = { textContent: 'NoMi no disponible', style: {} }; },
+    mostrarAvisoVerificacion: () => { sharedState._avisos['nomi-modelo-aviso'] = { textContent: 'verificacion', style: {} }; },
+    // DOM stub que lee sharedState
+    document: {
+        getElementById: (id) => {
+            if (id in sharedState._avisos) return sharedState._avisos[id];
+            return { style: {}, setAttribute() {}, appendChild() {} };
+        },
+        createElement: (tag) => {
+            const el = { tagName: tag.toUpperCase(), style: {}, children: [], setAttribute() {}, appendChild(c) { this.children.push(c); return c; } };
+            if (tag === 'option') el.selected = false;
+            return el;
+        },
+        createTextNode: (t) => ({ textContent: String(t) }),
+        body: { appendChild() {} },
+    },
 };
 ctx.window = ctx; // en el navegador window es el global; aqui tambien.
 vm.createContext(ctx);
@@ -83,6 +124,13 @@ hacerPeticion = async (url, opts) => {
 };
 
 (async () => {
+    // nomi-modelos-free.js redefine las funciones declaradas en ctx al cargarse.
+    // Reaplicar stubs observables para comprobar la limpieza de avisos sin DOM real.
+    limpiarAvisoModelo = () => { sharedState._avisos['nomi-modelo-aviso'] = null; };
+    mostrarAvisoModeloRetirado = () => { sharedState._avisos['nomi-modelo-aviso'] = { textContent: 'retirado', style: {} }; };
+    mostrarAvisoModeloNoDisponibleNoMi = () => { sharedState._avisos['nomi-modelo-aviso'] = { textContent: 'NoMi no disponible', style: {} }; };
+    mostrarAvisoVerificacion = () => { sharedState._avisos['nomi-modelo-aviso'] = { textContent: 'verificacion', style: {} }; };
+
     // 1) Modo por defecto es OpenRouter.
     assert.strictEqual(getModoAcceso(), MODO_ACCESO_OPENROUTER, 'modo por defecto debe ser openrouter');
     assert.strictEqual(getModoAcceso(), 'openrouter');
@@ -106,8 +154,9 @@ hacerPeticion = async (url, opts) => {
         }
         throw new Error('endpoint inesperado: ' + url);
     };
-    const token = await activarAccesoNoMi('abcd');
-    assert.strictEqual(token, 'TOK123');
+    const resultado = await activarAccesoNoMi('abcd');
+    assert.strictEqual(resultado.token, 'TOK123');
+    assert.ok(resultado.catalogo, 'debe devolver el catálogo sincronizado');
     assert.strictEqual(getNomiToken(), 'TOK123');
     assert.strictEqual(getNomiAccesoActivo(), true);
     // El handler del menu cambia el modo a 'nomi' tras activar (simulado aqui).
@@ -644,6 +693,78 @@ hacerPeticion = async (url, opts) => {
     assert.ok(!mensajesBot[0].includes('❌'), 'red: sin prefijo crudo ❌');
     assert.strictEqual(NoMiState.reintentarPregunta, 'PREG_RED', 'red: guarda pregunta para Reintentar');
     agregarMensaje = _agregar;
+
+    // 42) Onboarding sin recarga: activación usa catálogo devuelto, limpia avisos previos y revalida.
+    // Simula flujo completo: instalación limpia → código válido → activación exitosa.
+    sessionStorage.removeItem('nomi_modelo_verificado');
+    mostrarAvisoModeloRetirado(); // Aviso previo que debe limpiarse
+    const avisoPrevio = document.getElementById('nomi-modelo-aviso');
+    assert.ok(avisoPrevio, 'debe haber aviso previo antes de activar');
+    setModoAcceso(MODO_ACCESO_NOMI);
+    setNomiModelo('openai/gpt-oss-20b');
+    responder = async (url, opts) => {
+        if (url.endsWith('/v1/activate')) {
+            assert.ok(opts.body && JSON.parse(opts.body).codigo === 'ABCD1234');
+            return { ok: true, token: 'TOK_ONBOARD' };
+        }
+        if (url.endsWith('/v1/catalog')) {
+            return { modelos: [{ proveedor: 'groq', id: 'openai/gpt-oss-20b', estado: 'activo', nombre: 'GPT-OSS 20B' }] };
+        }
+        throw new Error('endpoint inesperado: ' + url);
+    };
+    const resultadoOnboard = await activarAccesoNoMi('ABCD1234');
+    assert.strictEqual(resultadoOnboard.token, 'TOK_ONBOARD');
+    assert.ok(resultadoOnboard.catalogo, 'debe devolver catálogo');
+    assert.strictEqual(getNomiToken(), 'TOK_ONBOARD');
+    assert.strictEqual(getNomiAccesoActivo(), true);
+    // Debe limpiar aviso previo y revalidar contra catálogo devuelto
+    const avisoDespues = document.getElementById('nomi-modelo-aviso');
+    assert.strictEqual(avisoDespues, null, 'debe limpiar aviso previo tras activación exitosa');
+    assert.strictEqual(sessionStorage.getItem('nomi_modelo_verificado'), 'true', 'debe marcar sesión verificada tras catálogo OK');
+    console.log('  [42] Onboarding sin recarga: usa catálogo, limpia avisos, revalida');
+
+    // 43) Catálogo temporalmente fallido: conserva token y acceso, NO marca verificada, muestra estado recuperable.
+    sessionStorage.removeItem('nomi_modelo_verificado');
+    mostrarAvisoModeloRetirado();
+    setNomiToken('');
+    setNomiAccesoActivo(false);
+    responder = async (url, opts) => {
+        if (url.endsWith('/v1/activate')) {
+            return { ok: true, token: 'TOK_CAT_FAIL' };
+        }
+        if (url.endsWith('/v1/catalog')) {
+            const e = new Error('red caída'); throw e;
+        }
+        throw new Error('inesperado');
+    };
+    const resultadoCatFail = await activarAccesoNoMi('FAILCAT');
+    assert.strictEqual(resultadoCatFail.token, 'TOK_CAT_FAIL');
+    assert.strictEqual(resultadoCatFail.catalogo, null, 'catálogo fallido debe ser null');
+    assert.strictEqual(getNomiToken(), 'TOK_CAT_FAIL', 'debe conservar token');
+    assert.strictEqual(getNomiAccesoActivo(), true, 'debe conservar acceso activo');
+    assert.strictEqual(sessionStorage.getItem('nomi_modelo_verificado'), null, 'NO debe marcar sesión verificada si catálogo falla');
+    // El handler del menú/onboarding muestra "Verificando catálogo…"; aquí el
+    // núcleo debe dejar limpio el aviso anterior, sin falso modelo inválido.
+    const avisoCatFail = document.getElementById('nomi-modelo-aviso');
+    assert.strictEqual(avisoCatFail, null, 'no debe conservar aviso de modelo inválido tras un fallo temporal');
+    console.log('  [43] Catálogo fallido: conserva acceso, no marca verificada, estado recuperable en UI');
+
+    // 44) Limpia avisos de modelo ANTES de revalidar en activación.
+    sessionStorage.removeItem('nomi_modelo_verificado');
+    mostrarAvisoModeloNoDisponibleNoMi(); // Aviso NoMi específico
+    setModoAcceso(MODO_ACCESO_NOMI);
+    setNomiModelo('openai/gpt-oss-120b');
+    responder = async (url, opts) => {
+        if (url.endsWith('/v1/activate')) return { ok: true, token: 'TOK_CLEAR' };
+        if (url.endsWith('/v1/catalog')) {
+            return { modelos: [{ proveedor: 'groq', id: 'openai/gpt-oss-120b', estado: 'activo', nombre: 'GPT-OSS 120B' }] };
+        }
+        throw new Error('inesperado');
+    };
+    await activarAccesoNoMi('CLEAR123');
+    const avisoLimpio = document.getElementById('nomi-modelo-aviso');
+    assert.strictEqual(avisoLimpio, null, 'debe limpiar aviso NoMi previo antes de revalidar');
+    console.log('  [44] Limpia avisos antes de revalidar en activación');
 
     console.log('OK: todas las pruebas de acceso NoMi pasaron');
 })().catch((e) => { console.error('FALLO:', e && e.message); throw e; });

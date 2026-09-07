@@ -53,6 +53,7 @@ function makeEl(tag) {
     el.prepend = (c) => { c.parentNode = el; el.children.unshift(c); return c; };
     el.insertBefore = (c, ref) => { c.parentNode = el; const i = el.children.indexOf(ref); if (i < 0) el.children.push(c); else el.children.splice(i, 0, c); return c; };
     el.remove = () => { if (el.parentNode) { const i = el.parentNode.children.indexOf(el); if (i >= 0) el.parentNode.children.splice(i, 1); el.parentNode = null; } };
+    el.click = () => {};
     el.setAttribute = (k, v) => { el.attributes[k] = String(v); if (k === 'id') el.id = String(v); if (k.startsWith('data-')) el.dataset[k.slice(5)] = String(v); };
     el.getAttribute = (k) => (k in el.attributes ? el.attributes[k] : null);
     Object.defineProperty(el, 'textContent', {
@@ -125,15 +126,24 @@ const documento = {
 // ---- Stubs de navegador y helpers no cubiertos por los módulos cargados ----
 const memLocal = new Map();
 const store = new Map();
+const memSession = new Map();
+const exportCapture = { value: null };
 const ctx = {
     console, assert,
+    memLocal, exportCapture,
     document: documento,
-    location: { href: 'https://example.com', hostname: 'example.com', reload() {} },
+    location: { href: 'https://example.com/', hostname: 'example.com', pathname: '/', reload() {} },
     localStorage: {
         getItem: (k) => (memLocal.has(k) ? memLocal.get(k) : null),
         setItem: (k, v) => memLocal.set(k, String(v)),
         removeItem: (k) => memLocal.delete(k),
         get keysArr() { return [...memLocal.keys()]; },
+    },
+    sessionStorage: {
+        getItem: (k) => (memSession.has(k) ? memSession.get(k) : null),
+        setItem: (k, v) => memSession.set(k, String(v)),
+        removeItem: (k) => memSession.delete(k),
+        clear: () => memSession.clear(),
     },
     GM_getValue: (k, d) => (store.has(k) ? store.get(k) : d),
     GM_setValue: (k, v) => store.set(k, v),
@@ -143,8 +153,18 @@ const ctx = {
     alert: () => {},
     setTimeout, clearTimeout, setInterval, clearInterval,
     TextEncoder, TextDecoder,
+    Blob: class {
+        constructor(parts, options) { this.texto = parts.map(String).join(''); this.type = options.type; }
+    },
+    URL: {
+        createObjectURL: (blob) => { exportCapture.value = { contenido: blob.texto, tipo: blob.type }; return 'blob:nomi-test'; },
+        revokeObjectURL: () => {},
+    },
+    navigator: { geolocation: null },
 };
 ctx.window = ctx;
+ctx.top = ctx;
+ctx.self = ctx;
 ctx.document = documento;
 ctx.limpiarBody = () => { documento.body = makeEl('body'); };
 // Tamaños y helpers básicos
@@ -188,6 +208,7 @@ const fuentes = [
     leer('nomi-logging.js'),
     leer('nomi-chat.js'),
     leer('nomi-ui.js'),
+    leer('nomi-ubicacion.js'),
     leer('nomi-asistente-config.js'),
     leer('nomi-menu-config.js'),
     leer('nomi-estadisticas.js'),
@@ -613,7 +634,7 @@ const pruebas = `
         assert.strictEqual(codigo.toUpperCase(), 'ABCD', 'activar: envía código en mayúsculas');
         setNomiToken('TOK_ACTIVAR');
         setNomiAccesoActivo(true);
-        return Promise.resolve('TOK_ACTIVAR');
+        return Promise.resolve({ token: 'TOK_ACTIVAR', catalogo: { modelos: [{ proveedor: 'groq', estado: 'activo', id: 'openai/gpt-oss-20b' }] } });
     };
     assert.strictEqual(btnActivar.disabled, false, 'asistente: botón activar habilitado antes del click');
     btnActivar.onclick();
@@ -640,7 +661,7 @@ const pruebas = `
         assert.ok(clave.startsWith('nomi-pro-'), 'recuperar: envía clave con prefijo nomi-pro-');
         setNomiToken('TOK_PROP');
         setNomiAccesoActivo(true);
-        return Promise.resolve('TOK_PROP');
+        return Promise.resolve({ token: 'TOK_PROP', catalogo: { modelos: [{ proveedor: 'groq', estado: 'activo', id: 'openai/gpt-oss-20b' }] } });
     };
     assert.strictEqual(btnRecuperar.disabled, false, 'asistente: botón recuperar habilitado antes del click');
     btnRecuperar.onclick();
@@ -670,6 +691,43 @@ const pruebas = `
     assert.strictEqual(btnAct2.disabled, false, 'error: botón restaurado tras fallo');
     assert.strictEqual(estadoNoMi.textContent, '', 'error: estado limpio tras fallo');
     assert.ok(/inv.lido|usado|caducado/.test(NoMiState.__ultimaNotificacion), 'error: notificación humana visible');
+
+    // 11) La exportación nunca incluye system, coordenadas ni instrucciones internas.
+    memLocal.set('nomi_historial_example.com/_2026-09-07', JSON.stringify([
+        { role: 'system', content: 'Coordenadas GPS: -17.7, -63.0. Instrucción interna.' },
+        { role: 'user', content: '¿Cómo estará el clima?' },
+        { role: 'assistant', content: 'Estará templado.', fuentes: [{ titulo: 'Fuente', url: 'https://ejemplo.com/fuente' }] },
+    ]));
+    exportCapture.value = null;
+    exportarChat('2026-09-07', 'txt');
+    assert.ok(exportCapture.value && exportCapture.value.contenido.includes('¿Cómo estará el clima?'), 'TXT conserva el chat');
+    assert.ok(!/GPS|instrucción interna/i.test(exportCapture.value.contenido), 'TXT no filtra datos internos');
+    exportCapture.value = null;
+    exportarChat('2026-09-07', 'json');
+    const jsonExportado = JSON.parse(exportCapture.value.contenido);
+    assert.equal(jsonExportado.length, 2, 'JSON excluye system');
+    assert.ok(!exportCapture.value.contenido.includes('-17.7'), 'JSON no expone coordenadas');
+
+    // 12) GPS solo se solicita en la página principal y una denegación no se repite.
+    let solicitudesGps = 0;
+    let logsGps = 0;
+    let avisosGps = 0;
+    registrarError = () => { logsGps++; };
+    mostrarNotificacionTemporal = () => { avisosGps++; };
+    NoMiState.ubicacionActivada = true;
+    navigator.geolocation = { getCurrentPosition: () => { solicitudesGps++; } };
+    window.top = {}; window.self = window;
+    await actualizarUbicacion(false);
+    assert.equal(solicitudesGps, 0, 'iframe no pide GPS');
+    assert.equal(logsGps, 0, 'iframe no registra error');
+    window.top = window; window.self = window;
+    sessionStorage.clear();
+    navigator.geolocation = { getCurrentPosition: (ok, fail) => { solicitudesGps++; fail({ code: 1 }); } };
+    await actualizarUbicacion(false);
+    await actualizarUbicacion(false);
+    assert.equal(solicitudesGps, 2, 'la app puede volver a consultar, pero no repite el aviso');
+    assert.equal(logsGps, 1, 'solo registra la primera denegación');
+    assert.equal(avisosGps, 1, 'solo muestra un aviso humano por sesión');
 
         console.log('OK: todas las pruebas de UI (DOM simulado, sin innerHTML) pasaron');
 })().catch((e) => { console.error('FALLO:', e && e.message); throw e; });

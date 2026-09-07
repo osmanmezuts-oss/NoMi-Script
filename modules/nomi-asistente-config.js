@@ -152,9 +152,11 @@ function mostrarAsistenteConfiguracion() {
         const estadoNoMi = document.getElementById('nomi-config-estado-nomi');
         if (estadoNoMi) estadoNoMi.textContent = 'Activando…';
         try {
-            await activarAccesoNoMi(codigo);
+            const resultado = await activarAccesoNoMi(codigo);
             finalizarOnboardingNoMi();
-            mostrarNotificacionTemporal('✅ Acceso compartido NoMi activado.');
+            mostrarNotificacionTemporal(resultado.catalogo
+                ? '✅ Acceso compartido NoMi activado. Catálogo sincronizado.'
+                : '✅ Acceso compartido NoMi activado. Verificando catálogo…');
         } catch (err) {
             mostrarNotificacionTemporal(err && err.message ? err.message : 'Error al activar el acceso NoMi.');
         } finally {
@@ -176,9 +178,11 @@ function mostrarAsistenteConfiguracion() {
         const estadoNoMi = document.getElementById('nomi-config-estado-nomi');
         if (estadoNoMi) estadoNoMi.textContent = 'Recuperando…';
         try {
-            await recuperarAccesoPropietario(clave);
+            const resultado = await recuperarAccesoPropietario(clave);
             finalizarOnboardingNoMi();
-            mostrarNotificacionTemporal('✅ Acceso propietario recuperado.');
+            mostrarNotificacionTemporal(resultado.catalogo
+                ? '✅ Acceso propietario recuperado. Catálogo sincronizado.'
+                : '✅ Acceso propietario recuperado. Verificando catálogo…');
         } catch (err) {
             mostrarNotificacionTemporal(err && err.message ? err.message : 'Error al recuperar el acceso propietario.');
         } finally {

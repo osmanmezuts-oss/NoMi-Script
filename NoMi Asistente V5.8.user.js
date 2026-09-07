@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NoMi Asistente V5.8
 // @namespace    http://tampermonkey.net/
-// @version      5.21
+// @version      5.22
 // @description  Asistente IA con importación de credenciales, actualización automática y mejoras multiplataforma
 // @match        https://*/*
 // @grant        GM_xmlhttpRequest
@@ -61,7 +61,7 @@ const ALTO_POR_DEFECTO = 400;
 const UBICACION_EXPIRACION = 3 * 60 * 60 * 1000;
 const CONTEXTO_RECIENTE = 10;
 const DIAS_LIMITE_HISTORIAL = 7;
-const VERSION_SCRIPT = '5.21';
+const VERSION_SCRIPT = '5.22';
 const FECHA_LANZAMIENTO = '19/08/2026';
 
 const STORAGE_VALIDADO = 'nomi_validado';
@@ -928,13 +928,32 @@ function exportarChat(fecha, formato) {
     const data = localStorage.getItem(key);
     if (!data) { alert('No hay historial para esa fecha.'); return; }
     const historialData = JSON.parse(data);
+    // Privacidad: excluir mensajes de sistema (role: "system"), coordenadas GPS,
+    // prompts internos, instrucciones técnicas y contexto de ubicación.
+    // Solo exportar mensajes user/assistant y fuentes.
+    const filtrado = historialData
+        .filter(m => m && (m.role === 'user' || m.role === 'assistant'))
+        .map(m => ({
+            role: m.role,
+            content: m.content,
+            // Fuentes solo si existen (formato compacto)
+            fuentes: Array.isArray(m.fuentes) ? m.fuentes.map(f => ({
+                titulo: f.titulo,
+                url: f.url,
+                fecha: f.fecha
+            })) : undefined
+        }));
     let contenido = '';
     if (formato === 'json') {
-        contenido = JSON.stringify(historialData, null, 2);
+        contenido = JSON.stringify(filtrado, null, 2);
     } else {
-        contenido = historialData.map(m => {
+        contenido = filtrado.map(m => {
             const rol = m.role === 'user' ? '👤 Tú' : `🤖 ${NOMBRE_ASISTENTE}`;
-            return `${rol}: ${m.content}`;
+            let texto = `${rol}: ${m.content}`;
+            if (m.fuentes && m.fuentes.length) {
+                texto += '\n\nFuentes:\n' + m.fuentes.map((f, i) => `[${i+1}] ${f.titulo} — ${f.url}`).join('\n');
+            }
+            return texto;
         }).join('\n\n');
     }
     const blob = new Blob([contenido], {type: formato === 'json' ? 'application/json' : 'text/plain;charset=utf-8'});
@@ -1482,8 +1501,28 @@ function construirMensajeResumenNoMi(historialCompleto) {
     return prompt;
 }
 
+// Aplica un catálogo recién obtenido tras activar o recuperar NoMi. Centralizarlo
+// evita que el asistente inicial y el menú queden con avisos de otro modo/modelo.
+function sincronizarCatalogoTrasAccesoNoMi(catalogo) {
+    if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem('nomi_modelo_verificado');
+    if (typeof limpiarAvisoModelo === 'function') limpiarAvisoModelo();
+    if (!catalogo) return false;
+
+    const activo = (catalogo.modelos || []).find(x => x && x.proveedor === 'groq' && x.estado === 'activo');
+    if (activo && activo.id) setNomiModelo(activo.id);
+    const modelo = getNomiModelo() || NOMI_MODELO_POR_DEFECTO;
+    const disponible = typeof modeloActivoEnCatalogoNoMi === 'function'
+        && modeloActivoEnCatalogoNoMi(modelo, catalogo);
+    if (disponible) {
+        if (typeof sessionStorage !== 'undefined') sessionStorage.setItem('nomi_modelo_verificado', 'true');
+        return true;
+    }
+    if (typeof mostrarAvisoModeloNoDisponibleNoMi === 'function') mostrarAvisoModeloNoDisponibleNoMi();
+    return false;
+}
+
 // Activa el acceso: canjea el código de invitación y guarda el token opaco.
-// Devuelve el token en éxito; lanza Error descriptivo en fallo (sin guardar token).
+// Devuelve { token, catalogo } en éxito; lanza Error descriptivo en fallo (sin guardar token).
 async function activarAccesoNoMi(codigo) {
     resetearUrlWorkerNoMi();
     const base = nomiWorkerBase();
@@ -1504,13 +1543,22 @@ async function activarAccesoNoMi(codigo) {
     setNomiWorkerUrl(NOMI_WORKER_URL_POR_DEFECTO);
     setNomiToken(datos.token);
     setNomiAccesoActivo(true);
-    // Intenta obtener el catálogo para fijar un modelo groq activo por defecto.
+    // Sincroniza catálogo real del Worker ANTES de validar/mostrar el modelo.
+    // Devuelve el catálogo (o null si falla temporalmente) para que el llamador
+    // pueda mostrar "Verificando acceso..." y manejar el error de forma recuperable.
+    let catalogo = null;
     try {
-        const cat = await obtenerCatalogoNoMi();
-        const m = (cat && cat.modelos || []).find(x => x && x.proveedor === 'groq' && x.estado === 'activo');
-        if (m && m.id) setNomiModelo(m.id);
-    } catch (_) { /* el catálogo es opcional para la activación */ }
-    return datos.token;
+        catalogo = await obtenerCatalogoNoMi();
+        sincronizarCatalogoTrasAccesoNoMi(catalogo);
+    } catch (_) {
+        // Catálogo opcional para la activación: conservamos token y acceso activo.
+        // El llamador decidirá cómo mostrar el estado transitorio.
+        catalogo = null;
+    }
+    // Aunque el catálogo falle, se elimina cualquier aviso heredado de Personal;
+    // el acceso ya es válido y podrá reintentarse la comprobación después.
+    if (!catalogo) sincronizarCatalogoTrasAccesoNoMi(null);
+    return { token: datos.token, catalogo };
 }
 
 // Convierte errores HTTP de activación en mensajes claros para el usuario.
@@ -1546,12 +1594,14 @@ async function recuperarAccesoPropietario(clave) {
     setNomiWorkerUrl(NOMI_WORKER_URL_POR_DEFECTO);
     setNomiToken(datos.token);
     setNomiAccesoActivo(true);
+    let catalogo = null;
     try {
-        const cat = await obtenerCatalogoNoMi();
-        const m = (cat && cat.modelos || []).find(x => x && x.proveedor === 'groq' && x.estado === 'activo');
-        if (m && m.id) setNomiModelo(m.id);
-    } catch (_) { /* el catálogo es opcional para la recuperación */ }
-    return datos.token;
+        catalogo = await obtenerCatalogoNoMi();
+        sincronizarCatalogoTrasAccesoNoMi(catalogo);
+    } catch (_) {
+        sincronizarCatalogoTrasAccesoNoMi(null);
+    }
+    return { token: datos.token, catalogo };
 }
 
 // Convierte errores HTTP de recuperación propietaria en mensajes claros.
@@ -1894,20 +1944,23 @@ async function verificarModeloAlIniciar() {
         ? ((NoMiState && NoMiState.nomiModelo) || NOMI_MODELO_POR_DEFECTO)
         : ((typeof getModelo === 'function' ? getModelo() : '') || (NoMiState && NoMiState.modeloActual));
     if (!modelo) return;
-    // Marcamos la sesión como verificada ANTES: no se reintenta en la misma pestaña aunque falle.
-    sessionStorage.setItem('nomi_modelo_verificado', 'true');
 
     if (modoNoMi) {
         // ---- Ruta NoMi: catálogo real del Worker, sin OpenRouter ----
         try {
             const catalogo = await obtenerCatalogoNoMi();
+            // Limpia cualquier aviso previo ANTES de revalidar.
+            limpiarAvisoModelo();
             if (modeloActivoEnCatalogoNoMi(modelo, catalogo)) {
-                // Activo en el Worker → sin aviso; se retira cualquier aviso previo de la sesión.
-                limpiarAvisoModelo();
+                // Activo en el Worker → sin aviso.
+                // Marca la sesión como verificada SOLO tras confirmar disponibilidad.
+                sessionStorage.setItem('nomi_modelo_verificado', 'true');
             } else {
                 mostrarAvisoModeloNoDisponibleNoMi();
             }
         } catch (e) {
+            // Catálogo fallido: NO marcar sesión como verificada (permite reintento en otra pestaña).
+            // Muestra aviso de verificación recuperable, no modelo inválido.
             mostrarAvisoVerificacion('fail');
         }
         return;
@@ -1916,16 +1969,18 @@ async function verificarModeloAlIniciar() {
     // ---- Ruta Personal: comprobación OpenRouter existente ----
     try {
         const lista = await fetchFreeModelos();
+        limpiarAvisoModelo();
         if (!modeloDisponible(modelo, lista)) {
             mostrarAvisoModeloRetirado();
             return;
         }
-        // Disponible → sin aviso; se retira cualquier aviso previo de la sesión.
-        limpiarAvisoModelo();
+        // Disponible → sin aviso; marca sesión verificada.
+        sessionStorage.setItem('nomi_modelo_verificado', 'true');
     } catch (e) {
         if (e instanceof OpenRouterRateLimitError) mostrarAvisoVerificacion('limit');
         else mostrarAvisoVerificacion('fail');
         // No marcamos el modelo como retirado ante 429 ni error de red.
+        // No marcar sesión verificada para permitir reintento.
     }
     // No se envía diagnóstico ni se registra error por retirada normal de un modelo.
 }
@@ -2127,7 +2182,23 @@ function aplicarCredencialesImportadas(credenciales) {
 // ======== MÓDULO: Ubicación Geográfica ========
 // NoMi Assistant – Funciones de geolocalización y gestión de ubicación
 
+// Clave para almacenar si ya se denegó el permiso en esta sesión
+const GPS_PERMISO_DENEGADO_SESION = 'nomi_gps_permiso_denegado_sesion';
+
+function esContextoPrincipal() {
+    try {
+        return window.top === window.self;
+    } catch {
+        // Si no se puede acceder a window.top (cross-origin), asumimos que NO es principal
+        return false;
+    }
+}
+
 function obtenerUbicacionPorGPS() {
+    // No pedir GPS desde iframes: salir silenciosamente sin pedir ni notificar
+    if (!esContextoPrincipal()) {
+        return Promise.reject(new Error('GPS no disponible en iframe'));
+    }
     return new Promise((resolve, reject) => {
         if (!navigator.geolocation) {
             reject(new Error('Geolocalización no soportada por este navegador.'));
@@ -2158,9 +2229,21 @@ function obtenerUbicacionPorGPS() {
                     }));
             },
             (error) => {
-                if (error.code === 1) reject(new Error('Permiso denegado. Activa la ubicación en los ajustes del navegador.'));
-                else if (error.code === 3) reject(new Error('Timeout. Reintentando...'));
-                else reject(new Error('Error al obtener ubicación: ' + error.message));
+                if (error.code === 1) {
+                    // Permiso denegado: registrar una vez por sesión, NO volver a notificar ni loguear
+                    const yaDenegado = sessionStorage.getItem(GPS_PERMISO_DENEGADO_SESION);
+                    if (!yaDenegado) {
+                        sessionStorage.setItem(GPS_PERMISO_DENEGADO_SESION, '1');
+                        reject(new Error('Permiso denegado. Activa la ubicación en los ajustes del navegador.'));
+                    } else {
+                        // Denegación repetida: rechazar silenciosamente sin notificar ni loguear
+                        reject(new Error('GPS: permiso denegado (ya informado)'));
+                    }
+                } else if (error.code === 3) {
+                    reject(new Error('Timeout. Reintentando...'));
+                } else {
+                    reject(new Error('Error al obtener ubicación: ' + error.message));
+                }
             },
             { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
         );
@@ -2184,6 +2267,14 @@ async function actualizarUbicacion(silencioso = false, intento = 1) {
         inyectarContextoUbicacion(ubicacion);
         return ubicacion;
     } catch (error) {
+        // Denegación repetida de permiso: no loguear ni notificar
+        if (error.message === 'GPS: permiso denegado (ya informado)') {
+            return null;
+        }
+        // GPS no disponible en iframe: salir silenciosamente
+        if (error.message === 'GPS no disponible en iframe') {
+            return null;
+        }
         if (intento <= 3 && error.message.includes('Timeout')) {
             if (!silencioso) mostrarNotificacionTemporal(`🔄 Reintentando GPS... (intento ${intento}/3)`);
             await new Promise(r => setTimeout(r, 2000));
@@ -2889,9 +2980,11 @@ function mostrarAsistenteConfiguracion() {
         const estadoNoMi = document.getElementById('nomi-config-estado-nomi');
         if (estadoNoMi) estadoNoMi.textContent = 'Activando…';
         try {
-            await activarAccesoNoMi(codigo);
+            const resultado = await activarAccesoNoMi(codigo);
             finalizarOnboardingNoMi();
-            mostrarNotificacionTemporal('✅ Acceso compartido NoMi activado.');
+            mostrarNotificacionTemporal(resultado.catalogo
+                ? '✅ Acceso compartido NoMi activado. Catálogo sincronizado.'
+                : '✅ Acceso compartido NoMi activado. Verificando catálogo…');
         } catch (err) {
             mostrarNotificacionTemporal(err && err.message ? err.message : 'Error al activar el acceso NoMi.');
         } finally {
@@ -2913,9 +3006,11 @@ function mostrarAsistenteConfiguracion() {
         const estadoNoMi = document.getElementById('nomi-config-estado-nomi');
         if (estadoNoMi) estadoNoMi.textContent = 'Recuperando…';
         try {
-            await recuperarAccesoPropietario(clave);
+            const resultado = await recuperarAccesoPropietario(clave);
             finalizarOnboardingNoMi();
-            mostrarNotificacionTemporal('✅ Acceso propietario recuperado.');
+            mostrarNotificacionTemporal(resultado.catalogo
+                ? '✅ Acceso propietario recuperado. Catálogo sincronizado.'
+                : '✅ Acceso propietario recuperado. Verificando catálogo…');
         } catch (err) {
             mostrarNotificacionTemporal(err && err.message ? err.message : 'Error al recuperar el acceso propietario.');
         } finally {
@@ -3422,7 +3517,10 @@ function mostrarMenu() {
         activarNoMiBtn.disabled = true;
         activarNoMiBtn.textContent = '⏳ Activando…';
         try {
-            await activarAccesoNoMi(codigo);
+            // activarAccesoNoMi ahora devuelve { token, catalogo } y sincroniza el catálogo
+            // antes de validar/mostrar el modelo. Durante la sincronización mostramos
+            // "Verificando acceso..." y NO mostramos falso modelo no disponible/retirado.
+            const resultado = await activarAccesoNoMi(codigo);
             setModoAcceso(MODO_ACCESO_NOMI);
             const sel = document.getElementById('nomi-select-modo');
             if (sel) sel.value = 'nomi';
@@ -3432,7 +3530,12 @@ function mostrarMenu() {
             actualizarIndicador();
             const est = document.getElementById('nomi-estado-acceso');
             if (est) est.textContent = '✅ Activo';
-            mostrarNotificacionTemporal('✅ Acceso NoMi activado. Ya puedes chatear.');
+            // Si el catálogo falló temporalmente, mostramos estado recuperable, no error de modelo.
+            if (resultado.catalogo) {
+                mostrarNotificacionTemporal('✅ Acceso NoMi activado. Catálogo sincronizado.');
+            } else {
+                mostrarNotificacionTemporal('✅ Acceso NoMi activado. Verificando catálogo…');
+            }
             cargarModelosNoMiAlMenu();
             establecerEstadoHud(null);
             consultarUsoNoMi();
@@ -3756,7 +3859,7 @@ async function procesarBusqueda(consulta) {
             return;
         }
         const resultadosTexto = resultados.results.map((r, i) => `${i+1}. ${r.title || 'Sin título'}\n   ${r.content || 'Sin descripción'}`).join('\n\n');
-        const prompt = `El usuario se encuentra en ${ubicacionTexto} (coordenadas GPS: ${ubicacionCoordenadas}). **DEBES usar ESTA ubicación para todas las consultas de clima y eventos locales.** Ignora cualquier otra ubicación que puedas inferir de la IP.\n\nInvestigué en la web sobre: "${consultaFinal}". Estos son los resultados obtenidos:\n\n${resultadosTexto}\n\nPor favor, ofrezca una respuesta clara, concisa y en un tono profesional pero cercano. Evite el uso excesivo de tablas o datos innecesarios. Resume la información más importante en 2-3 párrafos. Si hay datos numéricos (temperatura, precios, etc.), menciónelos de forma fluida dentro de la conversación. Mantenga un tono de colaboración entre iguales, sin tuteo excesivo.`;
+        const prompt = `El usuario se encuentra en ${ubicacionTexto} (coordenadas GPS: ${ubicacionCoordenadas}). **DEBES usar ESTA ubicación para todas las consultas de clima y eventos locales.** Ignora cualquier otra ubicación que puedas inferir de la IP.\n\nInvestigué en la web sobre: "${consultaFinal}". Estos son los resultados obtenidos:\n\n${resultadosTexto}\n\nPor favor, ofrezca una respuesta clara, concisa y en un tono profesional pero cercano. Evite el uso excesivo de tablas o datos innecesarios. Resume la información más importante en 2-3 párrafos. Si hay datos numéricos (temperatura, precios, etc.), menciónelos de forma fluida dentro de la conversación. Mantenga un tono de colaboración entre iguales, sin tuteo excesivo. **Descarta fuentes fuera del tema de la consulta; presenta la conclusión primero, no una lista de enlaces.**`;
         const respuestaIA = NoMiState.modoAcceso === MODO_ACCESO_NOMI
             ? await llamarIANoMi(prompt)
             : await llamarIA(prompt);

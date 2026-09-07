@@ -424,6 +424,26 @@ test('decisión semántica: Groq busca y sintetiza con tema, recencia y fuentes 
     assert.ok(!persistido.includes('Datos económicos recientes'), 'D1 no guarda evidencia');
 });
 
+test('noticias o deportes sin ámbito explícito no fuerzan la ubicación local', async () => {
+    const env = envNuevo();
+    const { token } = await crearInvitado(env);
+    const estado = instalarFetchSemantico({
+        groq: [
+            { toolCalls: toolBusqueda({ consulta: 'noticias deportivas internacionales de hoy', tema: 'news', recencia: 'day' }), total: 11 },
+            { texto: 'La actualización internacional más relevante es esta [1].', total: 18 },
+        ],
+    });
+    const r = await llamar(env, '/v1/chat', {
+        metodo: 'POST', token,
+        body: { modelo: 'openai/gpt-oss-20b', mensaje: '¿Qué noticias deportivas hay hoy?', permitirBusqueda: true },
+    });
+    assert.equal(r.status, 200);
+    const data = await r.json();
+    assert.equal(data.busquedaEstado, 'ok');
+    assert.equal(estado.tavily[0].query, 'noticias deportivas internacionales de hoy');
+    assert.match(estado.groq[0].messages[0].content, /no supongas alcance local/i, 'la decisión semántica no hereda localidad sin que se pida');
+});
+
 test('síntesis con texto Unicode permanece dentro del presupuesto Groq', async () => {
     const env = envNuevo();
     const { token } = await crearInvitado(env);
