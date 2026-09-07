@@ -12,10 +12,21 @@ function extraerCodigoError(texto) {
     return '';
 }
 
+// Selecciona la API de red del gestor: Userscripts usa GM.xmlHttpRequest;
+// Violentmonkey/Tampermonkey conservan también GM_xmlhttpRequest.
+function ejecutarPeticionGM(detalles) {
+    if (typeof GM_xmlhttpRequest === 'function') return GM_xmlhttpRequest(detalles);
+    if (typeof GM !== 'undefined' && GM && typeof GM.xmlHttpRequest === 'function') {
+        return GM.xmlHttpRequest(detalles);
+    }
+    return null;
+}
+
 function hacerPeticion(url, opciones) {
     return new Promise((resolve, reject) => {
-        if (typeof GM_xmlhttpRequest !== 'undefined') {
-            GM_xmlhttpRequest({
+        if ((typeof GM !== 'undefined' && GM && typeof GM.xmlHttpRequest === 'function')
+            || typeof GM_xmlhttpRequest === 'function') {
+            const solicitud = ejecutarPeticionGM({
                 method: opciones.method || 'GET',
                 url: url,
                 headers: opciones.headers || {},
@@ -49,6 +60,9 @@ function hacerPeticion(url, opciones) {
                         .catch(reject);
                 }
             });
+            if (solicitud && typeof solicitud.catch === 'function') {
+                solicitud.catch(reject);
+            }
         } else {
             fetch(url, opciones)
                 .then(async (r) => {
@@ -111,4 +125,3 @@ async function llamarIA(mensaje) {
         throw error;
     }
 }
-

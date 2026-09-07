@@ -1,6 +1,14 @@
 // ======== BOOTSTRAP DEL USERSCRIPT (no editar manualmente; se incluye en el bundle) ========
-(function() {
+(async function() {
     'use strict';
+
+    // Userscripts/Safari usa almacenamiento GM asíncrono. NoMi espera a cargarlo
+    // antes de leer token, modo y preferencias para que sean globales entre sitios.
+    try {
+        await inicializarPersistencia();
+    } catch (error) {
+        console.warn('NoMi no pudo inicializar el almacenamiento global; se usará el almacenamiento del sitio.', error);
+    }
 
     // ======== CARGA INICIAL DESDE PERSISTENCIA ========
     NoMiState.historial = getHistorial();

@@ -124,9 +124,9 @@ function mostrarAsistenteConfiguracion() {
     // propietario permanente con su clave, SIN necesidad de .enc ni ir a ⚙️.
     // En ambos casos: establece el modo NoMi, actualiza estado/HUD, cierra el
     // asistente, limpia los inputs (incluida la clave) y nunca persiste la clave.
-    const finalizarOnboardingNoMi = () => {
+    const finalizarOnboardingNoMi = async () => {
         // Estado NoMi activo y HUD sincronizado.
-        setModoAcceso(MODO_ACCESO_NOMI);
+        await setModoAcceso(MODO_ACCESO_NOMI);
         NoMiState.modoAcceso = MODO_ACCESO_NOMI;
         if (typeof actualizarHud === 'function') actualizarHud();
         if (typeof actualizarIndicador === 'function') actualizarIndicador();
@@ -153,7 +153,7 @@ function mostrarAsistenteConfiguracion() {
         if (estadoNoMi) estadoNoMi.textContent = 'Activando…';
         try {
             const resultado = await activarAccesoNoMi(codigo);
-            finalizarOnboardingNoMi();
+            await finalizarOnboardingNoMi();
             mostrarNotificacionTemporal(resultado.catalogo
                 ? '✅ Acceso compartido NoMi activado. Catálogo sincronizado.'
                 : '✅ Acceso compartido NoMi activado. Verificando catálogo…');
@@ -179,7 +179,7 @@ function mostrarAsistenteConfiguracion() {
         if (estadoNoMi) estadoNoMi.textContent = 'Recuperando…';
         try {
             const resultado = await recuperarAccesoPropietario(clave);
-            finalizarOnboardingNoMi();
+            await finalizarOnboardingNoMi();
             mostrarNotificacionTemporal(resultado.catalogo
                 ? '✅ Acceso propietario recuperado. Catálogo sincronizado.'
                 : '✅ Acceso propietario recuperado. Verificando catálogo…');

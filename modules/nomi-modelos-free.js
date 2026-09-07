@@ -57,7 +57,7 @@ function parsearModelosFree(datos) {
         }));
 }
 
-// Consulta compatible con userscripts: GM_xmlhttpRequest evita depender de CORS.
+// Consulta compatible con gestores: GM.xmlHttpRequest/GM_xmlhttpRequest evita CORS.
 function solicitarCatalogoOpenRouter() {
     return new Promise((resolve, reject) => {
         const procesarRespuesta = (status, texto, retryAfter) => {
@@ -66,8 +66,9 @@ function solicitarCatalogoOpenRouter() {
             try { resolve(JSON.parse(texto)); }
             catch { reject(new OpenRouterNetworkError('Respuesta inválida de OpenRouter')); }
         };
-        if (typeof GM_xmlhttpRequest !== 'undefined') {
-            GM_xmlhttpRequest({
+        if ((typeof GM !== 'undefined' && GM && typeof GM.xmlHttpRequest === 'function')
+            || typeof GM_xmlhttpRequest === 'function') {
+            const solicitud = ejecutarPeticionGM({
                 method: 'GET',
                 url: MODELO_FREE_URL,
                 headers: { Accept: 'application/json' },
@@ -75,6 +76,9 @@ function solicitarCatalogoOpenRouter() {
                 onerror: () => reject(new OpenRouterNetworkError('Sin conexión a OpenRouter')),
                 ontimeout: () => reject(new OpenRouterNetworkError('Tiempo de espera agotado'))
             });
+            if (solicitud && typeof solicitud.catch === 'function') {
+                solicitud.catch(() => reject(new OpenRouterNetworkError('Sin conexión a OpenRouter')));
+            }
             return;
         }
         fetch(MODELO_FREE_URL, { method: 'GET', headers: { Accept: 'application/json' } })

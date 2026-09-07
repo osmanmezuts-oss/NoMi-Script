@@ -4,6 +4,14 @@ Asistente Inteligente para Navegación Web
 
 NoMi es un asistente de inteligencia artificial integrado directamente en el navegador. Su objetivo es ayudar durante la navegación web, analizar páginas, recordar conversaciones y ofrecer asistencia contextual sin necesidad de cambiar de aplicación.
 
+Instalación y actualizaciones
+
+- Firefox/Android: instalar el archivo `NoMi Asistente V5.8.user.js` con Violentmonkey o Tampermonkey.
+- Safari en iPhone/iPad: instalar la extensión gratuita Userscripts, abrir en Safari la URL raw del archivo `.user.js` y aceptar la instalación desde el popup de la extensión.
+- En Userscripts se debe habilitar la inyección y conceder acceso a todos los sitios web.
+- Desde la versión 5.23, `@updateURL` consulta `NoMi Asistente V5.8.meta.js` y `@downloadURL` descarga el bundle actualizado. La primera instalación de 5.23 debe hacerse manualmente; las versiones posteriores podrán detectarse desde la vista de actualizaciones de Userscripts.
+- El token NoMi y las preferencias se guardan en el almacenamiento global del gestor, por lo que se conservan al cambiar de pestaña o dominio.
+
 ---
 
 Características Principales

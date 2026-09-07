@@ -395,7 +395,7 @@ function mostrarMenu() {
             // antes de validar/mostrar el modelo. Durante la sincronización mostramos
             // "Verificando acceso..." y NO mostramos falso modelo no disponible/retirado.
             const resultado = await activarAccesoNoMi(codigo);
-            setModoAcceso(MODO_ACCESO_NOMI);
+            await setModoAcceso(MODO_ACCESO_NOMI);
             const sel = document.getElementById('nomi-select-modo');
             if (sel) sel.value = 'nomi';
             const sec = document.getElementById('nomi-seccion-worker');

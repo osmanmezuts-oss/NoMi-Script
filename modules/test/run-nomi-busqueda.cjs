@@ -401,8 +401,19 @@ vm.runInContext(combinado, ctx, { filename: 'nomi-busqueda-test.js' });
 
 // Auditoría estática del bundle distribuible.
 const bundle = fs.readFileSync(path.join(ROOT, 'NoMi Asistente V5.8.user.js'), 'utf8');
+const metadata = fs.readFileSync(path.join(ROOT, 'NoMi Asistente V5.8.meta.js'), 'utf8');
 assert.ok(/@connect\s+api\.tavily\.com/.test(bundle), '@connect Tavily preserva la búsqueda Personal');
 assert.ok(/@connect\s+nomi-api-worker\./.test(bundle), '@connect del Worker NoMi presente');
+assert.ok(/@inject-into\s+content/.test(bundle), 'Userscripts/Safari recibe APIs GM en content');
+assert.ok(/@grant\s+GM\.getValue/.test(bundle) && /@grant\s+GM\.setValue/.test(bundle), 'almacenamiento GM moderno declarado');
+assert.ok(/@grant\s+GM\.xmlHttpRequest/.test(bundle), 'red GM moderna declarada');
+assert.ok(!/GM_registerMenuCommand/.test(bundle), 'sin grant no soportado ni usado');
+assert.ok(/@updateURL\s+https:\/\/[^\s]+\.meta\.js/.test(bundle), 'updateURL apunta al metadata remoto');
+assert.ok(/@downloadURL\s+https:\/\/[^\s]+\.user\.js/.test(bundle), 'downloadURL apunta al bundle remoto');
+assert.ok(metadata.startsWith('// ==UserScript=='), 'metadata empieza en byte cero');
+assert.ok(metadata.trimEnd().endsWith('// ==/UserScript=='), 'metadata contiene solo el bloque instalable');
+assert.ok(/@version\s+5\.23/.test(metadata), 'metadata publica la versión actual');
+assert.ok(!/ARCHIVO GENERADO|MÓDULO|MODULO/.test(metadata), 'metadata no contiene código del bundle');
 assert.ok(!/TAVILY_API_KEY/.test(bundle), 'el bundle nunca contiene TAVILY_API_KEY');
 assert.ok(!/function detectarBusquedaNoMi/.test(bundle), 'bundle sin detector léxico NoMi');
 assert.ok(/permitirBusqueda/.test(bundle), 'bundle incluye el contrato semántico');
@@ -410,4 +421,4 @@ assert.ok(/forzarBusqueda/.test(bundle), 'bundle conserva la lupa como búsqueda
 assert.ok(/herramientasProtocolo/.test(bundle), 'bundle detecta versiones antiguas del Worker para búsqueda y clima');
 assert.ok(/su asistente virtual\./.test(bundle), 'saludo inicial femenino');
 assert.ok(/Estoy dise[ñn]ada/.test(bundle), 'identidad femenina preservada');
-console.log('OK: cabecera y bundle verificados (sin secretos, identidad femenina, búsqueda semántica)');
+console.log('OK: cabecera, metadata y bundle verificados (actualización remota y compatibilidad Userscripts)');

@@ -27,6 +27,7 @@ BOOTSTRAP_PATH = os.path.join(REPO, "build", "userscript-bootstrap.js")
 ORDER_PATH = os.path.join(REPO, "build", "modules-order.txt")
 CONFIG_PATH = os.path.join(REPO, "modules", "nomi-config-estatica.js")
 OUTPUT_PATH = os.path.join(REPO, "NoMi Asistente V5.8.user.js")
+META_OUTPUT_PATH = os.path.join(REPO, "NoMi Asistente V5.8.meta.js")
 MODULES_DIR = os.path.join(REPO, "modules")
 
 VERSION_MARKER = "__NOMI_VERSION__"
@@ -73,7 +74,7 @@ def reject_require(text, label):
         die("se encontro una linea @require en %s; el bundle no debe usar @require" % label)
 
 
-def build_userscript():
+def build_outputs():
     version = get_version()
 
     header = read_text(HEADER_PATH)
@@ -81,6 +82,11 @@ def build_userscript():
     if header.count(VERSION_MARKER) != 1:
         die("se requiere exactamente un marcador %s en la cabecera: %s" % (VERSION_MARKER, HEADER_PATH))
     header = header.replace(VERSION_MARKER, version)
+    metadata_end = "// ==/UserScript=="
+    metadata_pos = header.find(metadata_end)
+    if metadata_pos == -1:
+        die("no se encontro el cierre del bloque de metadatos en " + HEADER_PATH)
+    metadata = header[:metadata_pos + len(metadata_end)] + "\n"
 
     names = read_module_order()
     parts = [header.rstrip("\n")]
@@ -102,12 +108,29 @@ def build_userscript():
 
     generated = "\n".join(parts) + "\n"
     reject_require(generated, "la salida generada")
-    return generated
+    return generated, metadata
+
+
+def write_atomic(path, content):
+    out_dir = os.path.dirname(path)
+    fd, tmp_path = tempfile.mkstemp(dir=out_dir, prefix=".nomi-build-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        die("fallo al escribir el archivo generado: " + path)
 
 
 def main():
     check_mode = "--check" in sys.argv[1:]
-    generated = build_userscript()
+    generated, metadata = build_outputs()
 
     if check_mode:
         if not os.path.isfile(OUTPUT_PATH):
@@ -115,23 +138,16 @@ def main():
         current = read_text(OUTPUT_PATH)
         if current != generated:
             die("--check: el archivo generado NO esta actualizado: " + OUTPUT_PATH)
-        sys.stderr.write("OK: el archivo generado esta actualizado.\n")
+        if not os.path.isfile(META_OUTPUT_PATH):
+            die("--check: el archivo de metadatos no existe: " + META_OUTPUT_PATH)
+        current_meta = read_text(META_OUTPUT_PATH)
+        if current_meta != metadata:
+            die("--check: el archivo de metadatos NO esta actualizado: " + META_OUTPUT_PATH)
+        sys.stderr.write("OK: el bundle y sus metadatos estan actualizados.\n")
     else:
-        out_dir = os.path.dirname(OUTPUT_PATH)
-        fd, tmp_path = tempfile.mkstemp(dir=out_dir, prefix=".nomi-build-", suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
-                fh.write(generated)
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(tmp_path, OUTPUT_PATH)
-            sys.stderr.write("Generado: %s\n" % OUTPUT_PATH)
-        except Exception:
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-            die("fallo al escribir el bundle: " + OUTPUT_PATH)
+        write_atomic(OUTPUT_PATH, generated)
+        write_atomic(META_OUTPUT_PATH, metadata)
+        sys.stderr.write("Generados: %s y %s\n" % (OUTPUT_PATH, META_OUTPUT_PATH))
 
     sys.exit(0)
 

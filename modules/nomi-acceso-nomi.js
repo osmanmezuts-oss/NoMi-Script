@@ -11,8 +11,8 @@
 //     público y NO lleva Authorization.
 //   - Ante 401 se indica token inválido/revocado y NO se hace fallback a OpenRouter.
 //
-// Compatibilidad: reutiliza hacerPeticion (GM_xmlhttpRequest + fetch) para
-// funcionar en Violentmonkey y Tampermonkey sin dependencias extra.
+// Compatibilidad: reutiliza hacerPeticion (GM.xmlHttpRequest/GM_xmlhttpRequest
+// + fetch) para funcionar en Userscripts, Violentmonkey y Tampermonkey.
 
 // Error específico de token inválido/revocado del Worker.
 class NoMiTokenInvalidoError extends Error {
@@ -214,9 +214,11 @@ async function activarAccesoNoMi(codigo) {
     if (!datos || !datos.token) {
         throw new Error('El servidor NoMi no devolvió un token de instalación.');
     }
-    setNomiWorkerUrl(NOMI_WORKER_URL_POR_DEFECTO);
-    setNomiToken(datos.token);
-    setNomiAccesoActivo(true);
+    await Promise.all([
+        setNomiWorkerUrl(NOMI_WORKER_URL_POR_DEFECTO),
+        setNomiToken(datos.token),
+        setNomiAccesoActivo(true),
+    ]);
     // Sincroniza catálogo real del Worker ANTES de validar/mostrar el modelo.
     // Devuelve el catálogo (o null si falla temporalmente) para que el llamador
     // pueda mostrar "Verificando acceso..." y manejar el error de forma recuperable.
@@ -232,6 +234,8 @@ async function activarAccesoNoMi(codigo) {
     // Aunque el catálogo falle, se elimina cualquier aviso heredado de Personal;
     // el acceso ya es válido y podrá reintentarse la comprobación después.
     if (!catalogo) sincronizarCatalogoTrasAccesoNoMi(null);
+    // Espera también la selección de modelo que pudo producir la sincronización.
+    await esperarPersistenciaGlobal();
     return { token: datos.token, catalogo };
 }
 
@@ -265,9 +269,11 @@ async function recuperarAccesoPropietario(clave) {
         throw new Error('El servidor NoMi no devolvió un token de instalación.');
     }
     // NUNCA se persiste la clave; solo el token opaco de instalación.
-    setNomiWorkerUrl(NOMI_WORKER_URL_POR_DEFECTO);
-    setNomiToken(datos.token);
-    setNomiAccesoActivo(true);
+    await Promise.all([
+        setNomiWorkerUrl(NOMI_WORKER_URL_POR_DEFECTO),
+        setNomiToken(datos.token),
+        setNomiAccesoActivo(true),
+    ]);
     let catalogo = null;
     try {
         catalogo = await obtenerCatalogoNoMi();
@@ -275,6 +281,7 @@ async function recuperarAccesoPropietario(clave) {
     } catch (_) {
         sincronizarCatalogoTrasAccesoNoMi(null);
     }
+    await esperarPersistenciaGlobal();
     return { token: datos.token, catalogo };
 }
 
